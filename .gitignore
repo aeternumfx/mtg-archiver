@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/*.db
+data/*.json
+data/*.zip
+client/dist/
+*.tsbuildinfo
+.dev.pids*
+*.log
