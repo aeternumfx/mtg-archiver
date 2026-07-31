@@ -16,6 +16,7 @@ import { wantlistRouter } from './routes/wantlist';
 import { tradesRouter } from './routes/trades';
 import { organizeRouter } from './routes/organize';
 import { collectionGoalsRouter } from './routes/collectionGoals';
+import { setupRouter } from './routes/setup';
 import { initScryfallSync, getSyncStatus, startSync } from './services/scryfall';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,6 +39,7 @@ app.use('/api/wantlist', wantlistRouter);
 app.use('/api/trades', tradesRouter);
 app.use('/api/organize', organizeRouter);
 app.use('/api/collection-goals', collectionGoalsRouter);
+app.use('/api/setup', setupRouter);
 
 app.get('/api/sync-status', (_req, res) => {
   res.json(getSyncStatus());

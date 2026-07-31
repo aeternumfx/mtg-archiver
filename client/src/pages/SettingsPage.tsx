@@ -3,7 +3,7 @@ import {
   Title, Card, Group, Text, Radio, Stack, Button, FileInput, TextInput, Alert, Modal,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconDownload, IconUpload, IconAlertTriangle, IconCheck, IconX, IconTrash } from '@tabler/icons-react';
+import { IconDownload, IconUpload, IconAlertTriangle, IconCheck, IconX, IconTrash, IconSparkles } from '@tabler/icons-react';
 import { themes } from '../themes';
 import { api } from '../api/client';
 import type { ThemeKey } from '../themes';
@@ -100,6 +100,23 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
             ))}
           </Stack>
         </Radio.Group>
+      </Card>
+
+      <Card shadow="sm" padding="lg" radius="md" withBorder mb="md">
+        <Text fw={600} mb="md">Intro Tour</Text>
+        <Text size="sm" c="dimmed" mb="md">
+          Replay the welcome tour and setup choices (demo / recommended / blank slate).
+        </Text>
+        <Button
+          leftSection={<IconSparkles size={16} />}
+          variant="light"
+          onClick={() => {
+            api.setup.configure({ done: false }).catch(() => {});
+            window.dispatchEvent(new Event('mtg:show-setup'));
+          }}
+        >
+          Replay Intro Tour
+        </Button>
       </Card>
 
       <Card shadow="sm" padding="lg" radius="md" withBorder mb="md">

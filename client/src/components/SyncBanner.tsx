@@ -3,12 +3,25 @@ import { Alert, Progress, Group, Text } from '@mantine/core';
 import { IconCloudDownload, IconCheck, IconX } from '@tabler/icons-react';
 import type { SyncStatus } from '../types';
 
+const DISMISS_KEY = 'mtg-sync-dismissed';
+
 export default function SyncBanner({ syncStatus }: { syncStatus: SyncStatus }) {
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(true);
 
   useEffect(() => {
-    if (syncStatus.syncing) setDismissed(false);
-  }, [syncStatus.syncing]);
+    if (syncStatus.syncing) {
+      setDismissed(false);
+      return;
+    }
+    if (syncStatus.lastSync) {
+      setDismissed(localStorage.getItem(DISMISS_KEY) === syncStatus.lastSync);
+    }
+  }, [syncStatus.syncing, syncStatus.lastSync]);
+
+  const dismiss = () => {
+    setDismissed(true);
+    if (syncStatus.lastSync) localStorage.setItem(DISMISS_KEY, syncStatus.lastSync);
+  };
 
   const isSyncing = syncStatus.syncing;
   const isComplete = syncStatus.progress === 100 && !isSyncing;
@@ -24,7 +37,7 @@ export default function SyncBanner({ syncStatus }: { syncStatus: SyncStatus }) {
         color="green"
         mb="md"
         withCloseButton
-        onClose={() => setDismissed(true)}
+        onClose={dismiss}
       >
         Card database is up to date.
       </Alert>
@@ -39,7 +52,7 @@ export default function SyncBanner({ syncStatus }: { syncStatus: SyncStatus }) {
         color="red"
         mb="md"
         withCloseButton
-        onClose={() => setDismissed(true)}
+        onClose={dismiss}
       >
         Could not update card data. Check your connection and try again.
       </Alert>

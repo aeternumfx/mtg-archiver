@@ -4,6 +4,7 @@ import { MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import Layout from './components/Layout';
 import { UndoProvider } from './components/UndoToasts';
+import SetupGuide from './components/SetupGuide';
 import Dashboard from './pages/Dashboard';
 import AddCardsPage from './pages/AddCardsPage';
 import LocationsPage from './pages/LocationsPage';
@@ -48,6 +49,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Layout>
+        <SetupGuide />
       </UndoProvider>
     </MantineProvider>
   );

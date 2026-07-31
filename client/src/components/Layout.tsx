@@ -125,8 +125,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </AppShell.Navbar>
 
       <AppShell.Main>
+        <SyncBanner syncStatus={syncStatus} />
         <div key={location.pathname} className="page-enter">
-          <SyncBanner syncStatus={syncStatus} />
           {children}
         </div>
       </AppShell.Main>

@@ -14,6 +14,7 @@ A self-hosted web application for cataloging, managing, and tracking a Magic: Th
 - **Dashboard** — collection value over time, rarity/condition/location breakdowns, unrealized P&L
 - **Booster Opener** — log pack openings, track value vs cost, add pulls to collection
 - **Undo system** — global undo toasts (bottom-right, countdown, dismissible) that persist across pages
+- **Onboarding** — a welcome tour on first run (re-triggered after a full reset, or via Settings → Replay Intro Tour) that offers a demo instance, a recommended setup, or a blank slate
 - **Scryfall Sync** — automatic daily sync of card data and prices (gzipped JSONL format)
 - **Export/Import** — full backup of your collection, wantlist, decks, trades, and history as JSON; restore or merge later
 - **Themes** — Light, Dark, and Galaxy UI themes

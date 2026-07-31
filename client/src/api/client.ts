@@ -110,6 +110,12 @@ export const api = {
     delete: (id: number) => request<void>(`/api/collection-goals/${id}`, { method: 'DELETE' }),
   },
 
+  setup: {
+    get: () => request<{ mode: string | null; done: boolean }>('/api/setup'),
+    configure: (data: { mode?: string; done?: boolean }) =>
+      request<{ ok: boolean; mode: string | null; done: boolean }>('/api/setup', { method: 'POST', body: JSON.stringify(data) }),
+  },
+
   organize: {
     pending: () => request<any[]>('/api/organize/pending'),
     resolve: (data: { itemIds?: number[]; all?: boolean }) =>
