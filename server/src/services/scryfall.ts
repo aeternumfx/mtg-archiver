@@ -7,7 +7,10 @@ import readline from 'readline';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.resolve(__dirname, '../../../data');
+const dataDir = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.resolve(__dirname, '../../../data');
+fs.mkdirSync(dataDir, { recursive: true });
 
 let syncing = false;
 let lastSync: string | null = null;

@@ -1,9 +1,17 @@
 node_modules/
 dist/
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.json
 data/*.zip
 client/dist/
 *.tsbuildinfo
 .dev.pids*
 *.log
+release/
+
+# Docker files are built/generated separately
+Dockerfile
+.dockerignore
+docker-compose.yml

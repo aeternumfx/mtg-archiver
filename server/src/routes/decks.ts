@@ -4,6 +4,16 @@ import { eq, and, sql } from 'drizzle-orm';
 
 export const decksRouter = Router();
 
+const getDeckLocation = (deckId: number) =>
+  db.select().from(schema.locations).where(eq(schema.locations.deckId, deckId)).get();
+
+function findGhostWantlist(reqId: number, cardName: string): { id: number } | undefined {
+  const byLink = sqlite.prepare('SELECT id FROM wantlist_items WHERE deck_required_id = ?').get(reqId) as { id: number } | undefined;
+  if (byLink) return byLink;
+  return sqlite.prepare("SELECT id FROM wantlist_items WHERE card_name = ? AND notes LIKE 'Wanted for deck: %' ORDER BY created_at DESC LIMIT 1")
+    .get(cardName) as { id: number } | undefined;
+}
+
 decksRouter.get('/', (_req, res) => {
   const allDecks = db.select().from(schema.decks).orderBy(schema.decks.name).all();
   const result = allDecks.map(d => {
@@ -11,7 +21,8 @@ decksRouter.get('/', (_req, res) => {
       .where(eq(schema.collectionItems.deckId, d.id))
       .all()
       .reduce((s, i) => s + i.quantity, 0);
-    return { ...d, cardCount: count };
+    const loc = getDeckLocation(d.id);
+    return { ...d, cardCount: count, locationId: loc?.id ?? null };
   });
   res.json(result);
 });
@@ -23,22 +34,44 @@ decksRouter.get('/:id', (req, res) => {
     .where(eq(schema.collectionItems.deckId, deck.id))
     .all()
     .reduce((s, i) => s + i.quantity, 0);
-  res.json({ ...deck, cardCount: count });
+  const loc = getDeckLocation(deck.id);
+  res.json({ ...deck, cardCount: count, locationId: loc?.id ?? null });
 });
 
 decksRouter.post('/', (req, res) => {
-  const { name, description, cardId, deckType, commanderCardId, partnerCardId, backgroundCardId, groupId } = req.body;
+  const { name, description, cardId, deckType, commanderCardId, partnerCardId, backgroundCardId, groupId, commanderItemId, partnerItemId, backgroundItemId } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
   try {
-    const deck = db.insert(schema.decks)
-      .values({
-        name, description: description ?? null, cardId: cardId ?? null,
-        deckType: deckType ?? 'custom', commanderCardId: commanderCardId ?? null,
-        partnerCardId: partnerCardId ?? null, backgroundCardId: backgroundCardId ?? null,
-        groupId: groupId ?? null,
-      })
-      .returning().get();
-    res.status(201).json({ ...deck, cardCount: 0 });
+    const { deck, loc } = sqlite.transaction(() => {
+      const deck = db.insert(schema.decks)
+        .values({
+          name, description: description ?? null, cardId: cardId ?? null,
+          deckType: deckType ?? 'custom', commanderCardId: commanderCardId ?? null,
+          partnerCardId: partnerCardId ?? null, backgroundCardId: backgroundCardId ?? null,
+          commanderItemId: commanderItemId ?? null, partnerItemId: partnerItemId ?? null, backgroundItemId: backgroundItemId ?? null,
+          groupId: groupId ?? null,
+        })
+        .returning().get();
+      let loc: { id: number } | null = null;
+      try {
+        loc = db.insert(schema.locations)
+          .values({
+            name: deck.name,
+            description: description ? `Deck location for ${deck.name}` : null,
+            type: 'deck',
+            groupId: groupId ?? null,
+            deckId: deck.id,
+          })
+          .returning().get();
+      } catch (err: any) {
+        if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+          throw new Error(`A location named "${deck.name}" already exists. Rename the deck or that location.`);
+        }
+        throw err;
+      }
+      return { deck, loc };
+    })();
+    res.status(201).json({ ...deck, cardCount: 0, locationId: loc?.id ?? null });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -46,7 +79,7 @@ decksRouter.post('/', (req, res) => {
 
 decksRouter.put('/:id', (req, res) => {
   const id = Number(req.params.id);
-  const { name, description, cardId, deckType, commanderCardId, partnerCardId, backgroundCardId, groupId } = req.body;
+  const { name, description, cardId, deckType, commanderCardId, partnerCardId, backgroundCardId, groupId, commanderItemId, partnerItemId, backgroundItemId } = req.body;
   try {
     const values: Record<string, any> = {};
     if (name !== undefined) values.name = name;
@@ -58,12 +91,37 @@ decksRouter.put('/:id', (req, res) => {
     if (backgroundCardId !== undefined) values.backgroundCardId = backgroundCardId ?? null;
     if (groupId !== undefined) values.groupId = groupId ?? null;
 
-    const deck = db.update(schema.decks)
-      .set(values)
-      .where(eq(schema.decks.id, id))
-      .returning().get();
+    const validateItem = (itemId: number | null) => {
+      if (itemId === null || itemId === undefined) return itemId ?? null;
+      const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, itemId)).get();
+      if (!item) throw new Error('Collection item not found');
+      return itemId;
+    };
+    if (commanderItemId !== undefined) values.commanderItemId = validateItem(commanderItemId);
+    if (partnerItemId !== undefined) values.partnerItemId = validateItem(partnerItemId);
+    if (backgroundItemId !== undefined) values.backgroundItemId = validateItem(backgroundItemId);
+
+    const deck = sqlite.transaction(() => {
+      const deck = db.update(schema.decks)
+        .set(values)
+        .where(eq(schema.decks.id, id))
+        .returning().get();
+      if (!deck) return null;
+      if (name !== undefined) {
+        const loc = getDeckLocation(id);
+        if (loc && loc.name !== name) {
+          db.update(schema.locations).set({ name }).where(eq(schema.locations.id, loc.id)).run();
+        }
+      }
+      if (groupId !== undefined) {
+        const loc = getDeckLocation(id);
+        if (loc) db.update(schema.locations).set({ groupId: groupId ?? null }).where(eq(schema.locations.id, loc.id)).run();
+      }
+      return deck;
+    })();
     if (!deck) return res.status(404).json({ error: 'Deck not found' });
-    res.json(deck);
+    const loc = getDeckLocation(id);
+    res.json({ ...deck, locationId: loc?.id ?? null });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -72,11 +130,26 @@ decksRouter.put('/:id', (req, res) => {
 decksRouter.delete('/:id', (req, res) => {
   const id = Number(req.params.id);
   try {
-    db.update(schema.collectionItems)
-      .set({ deckId: null })
-      .where(eq(schema.collectionItems.deckId, id))
-      .run();
-    db.delete(schema.decks).where(eq(schema.decks.id, id)).run();
+    sqlite.transaction(() => {
+      db.update(schema.collectionItems)
+        .set({ deckId: null })
+        .where(eq(schema.collectionItems.deckId, id))
+        .run();
+
+      const loc = getDeckLocation(id);
+      if (loc) {
+        const inbox = db.select().from(schema.locations).where(eq(schema.locations.builtIn, 1)).get();
+        if (inbox) {
+          db.update(schema.collectionItems)
+            .set({ locationId: inbox.id, destinationId: null })
+            .where(eq(schema.collectionItems.locationId, loc.id))
+            .run();
+        }
+        db.delete(schema.locations).where(eq(schema.locations.id, loc.id)).run();
+      }
+
+      db.delete(schema.decks).where(eq(schema.decks.id, id)).run();
+    })();
     res.status(204).end();
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -180,13 +253,15 @@ decksRouter.delete('/:id/cards/:itemId', (req, res) => {
 
 decksRouter.post('/:id/link', (req, res) => {
   const deckId = Number(req.params.id);
-  const { itemId } = req.body;
+  const { itemId, schedule } = req.body;
   if (!itemId) return res.status(400).json({ error: 'itemId is required' });
   try {
     const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, Number(itemId))).get();
     if (!item) return res.status(404).json({ error: 'Collection item not found' });
+    const deckLoc = getDeckLocation(deckId);
+    if (!deckLoc) return res.status(400).json({ error: 'Deck has no location' });
     db.update(schema.collectionItems)
-      .set({ deckId })
+      .set({ deckId, destinationId: schedule ? deckLoc.id : null })
       .where(eq(schema.collectionItems.id, item.id))
       .run();
     res.json({ message: 'Card added to deck from collection' });
@@ -219,9 +294,14 @@ decksRouter.post('/:id/required', (req, res) => {
 
 decksRouter.delete('/:id/required/:reqId', (req, res) => {
   try {
-    db.delete(schema.deckRequiredCards)
-      .where(eq(schema.deckRequiredCards.id, Number(req.params.reqId)))
-      .run();
+    sqlite.transaction(() => {
+      const ghostReq = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, Number(req.params.reqId))).get();
+      const wl = ghostReq ? findGhostWantlist(ghostReq.id, ghostReq.cardName) : undefined;
+      if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+      db.delete(schema.deckRequiredCards)
+        .where(eq(schema.deckRequiredCards.id, Number(req.params.reqId)))
+        .run();
+    })();
     res.status(204).end();
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -247,26 +327,85 @@ decksRouter.patch('/:id/required/:reqId', (req, res) => {
 decksRouter.post('/:id/required/:reqId/fill', (req, res) => {
   const deckId = Number(req.params.id);
   const reqId = Number(req.params.reqId);
-  const { itemId } = req.body;
+  const { itemId, schedule } = req.body;
 
   if (!itemId) return res.status(400).json({ error: 'itemId is required' });
 
   try {
+    const deckLoc = getDeckLocation(deckId);
+    if (!deckLoc) return res.status(400).json({ error: 'Deck has no location' });
+
     sqlite.transaction(() => {
       const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, itemId)).get();
       if (!item) throw new Error('Collection item not found');
+      const req = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
 
       db.update(schema.collectionItems)
-        .set({ deckId })
+        .set({ deckId, destinationId: schedule ? deckLoc.id : null })
         .where(eq(schema.collectionItems.id, itemId))
         .run();
 
       db.delete(schema.deckRequiredCards)
         .where(eq(schema.deckRequiredCards.id, reqId))
         .run();
+
+      const wl = req ? findGhostWantlist(req.id, req.cardName) : undefined;
+      if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
     })();
 
     res.json({ message: 'Card added to deck from collection' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+decksRouter.post('/:id/required/:reqId/move', (req, res) => {
+  const reqId = Number(req.params.reqId);
+  const { destinationType, destinationId } = req.body;
+
+  try {
+    const ghost = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
+    if (!ghost) return res.status(404).json({ error: 'Required card not found' });
+
+    if (destinationType === 'location') {
+      const loc = db.select().from(schema.locations).where(eq(schema.locations.id, destinationId)).get();
+      if (!loc) return res.status(400).json({ error: 'Location not found' });
+      sqlite.transaction(() => {
+        const wl = findGhostWantlist(ghost.id, ghost.cardName);
+        if (wl) {
+          db.update(schema.wantlistItems)
+            .set({ destinationId: loc.id, deckRequiredId: null, notes: null })
+            .where(eq(schema.wantlistItems.id, wl.id))
+            .run();
+        }
+        db.delete(schema.deckRequiredCards)
+          .where(eq(schema.deckRequiredCards.id, ghost.id))
+          .run();
+      })();
+      return res.json({ message: `Ghost moved to ${loc.name}` });
+    }
+
+    if (destinationType === 'deck') {
+      const targetDeck = db.select().from(schema.decks).where(eq(schema.decks.id, destinationId)).get();
+      if (!targetDeck) return res.status(400).json({ error: 'Deck not found' });
+      const targetLoc = getDeckLocation(targetDeck.id);
+      sqlite.transaction(() => {
+        db.update(schema.deckRequiredCards)
+          .set({ deckId: targetDeck.id })
+          .where(eq(schema.deckRequiredCards.id, ghost.id))
+          .run();
+        const wl = findGhostWantlist(ghost.id, ghost.cardName);
+        if (wl) {
+          db.update(schema.wantlistItems)
+            .set({ destinationId: targetLoc?.id ?? null, notes: `Wanted for deck: ${targetDeck.name}` })
+            .where(eq(schema.wantlistItems.id, wl.id))
+            .run();
+        }
+      })();
+      return res.json({ message: `Ghost moved to ${targetDeck.name}` });
+    }
+
+    res.status(400).json({ error: 'destinationType must be "location" or "deck"' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

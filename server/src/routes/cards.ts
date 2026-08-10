@@ -292,22 +292,39 @@ cardsRouter.get('/grouped', (req, res) => {
 cardsRouter.get('/printings', (req, res) => {
   const name = req.query.name as string;
   if (!name) return res.status(400).json({ error: 'name query param required' });
-  const printings = db.select()
-    .from(schema.scryfallCards)
-    .where(and(NOT_ARENA, eq(schema.scryfallCards.name, name)))
-    .orderBy(desc(schema.scryfallCards.releasedAt))
-    .all();
 
-  const parsed = printings.map(c => ({
+  const page = req.query.page ? Math.max(1, Number(req.query.page)) : undefined;
+  const pageSize = req.query.pageSize ? Math.min(200, Math.max(1, Number(req.query.pageSize))) : undefined;
+
+  const baseWhere = and(NOT_ARENA, eq(schema.scryfallCards.name, name));
+  const parseCard = (c: any) => ({
     ...c,
     colors: c.colors ? JSON.parse(c.colors) : null,
     colorIdentity: c.colorIdentity ? JSON.parse(c.colorIdentity) : null,
     imageUris: c.imageUris ? JSON.parse(c.imageUris) : null,
     prices: c.prices ? JSON.parse(c.prices) : null,
     cardFaces: (c as any).cardFaces ? JSON.parse((c as any).cardFaces) : null,
-  }));
+  });
 
-  res.json(parsed);
+  if (page && pageSize) {
+    const total = db.select({ count: sql<number>`count(*)` }).from(schema.scryfallCards).where(baseWhere).get()?.count ?? 0;
+    const printings = db.select()
+      .from(schema.scryfallCards)
+      .where(baseWhere)
+      .orderBy(desc(schema.scryfallCards.releasedAt))
+      .limit(pageSize)
+      .offset((page - 1) * pageSize)
+      .all();
+    return res.json({ data: printings.map(parseCard), total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
+  }
+
+  const printings = db.select()
+    .from(schema.scryfallCards)
+    .where(baseWhere)
+    .orderBy(desc(schema.scryfallCards.releasedAt))
+    .all();
+
+  res.json(printings.map(parseCard));
 });
 
 cardsRouter.get('/sets', (_req, res) => {

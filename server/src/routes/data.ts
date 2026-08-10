@@ -62,6 +62,43 @@ export function applyDemo() {
     .all() as Array<{ id: number; name: string }>;
   const bindersGroup = demoGroupIds.find(g => g.name === 'Binders');
   const bulkGroup = demoGroupIds.find(g => g.name === 'Bulk');
+  const decksGroup = demoGroupIds.find(g => g.name === 'Decks');
+
+  const insertDeck = sqlite.prepare(
+    "INSERT INTO decks (name, description, deck_type, commander_card_id, group_id) VALUES (?, ?, ?, ?, ?) RETURNING id",
+  );
+  const insertDeckLoc = sqlite.prepare(
+    'INSERT INTO locations (name, description, type, group_id, deck_id) VALUES (?, ?, ?, ?, ?) RETURNING id',
+  );
+  const commander = sqlite.prepare(
+    "SELECT id, name FROM scryfall_cards WHERE type_line LIKE 'Legendary Creature%' AND legalities LIKE '%\"commander\":\"legal\"%' ORDER BY RANDOM() LIMIT 1",
+  ).get() as { id: string; name: string } | undefined;
+  const commanderId = commander?.id ?? null;
+
+  const deck1 = insertDeck.get('Standard Aggro', 'A fast red-based standard deck', 'standard', null, decksGroup?.id ?? null) as { id: number };
+  const deck2 = insertDeck.get('Commander Goodstuff', `Casual commander deck led by ${commander?.name ?? 'a legendary creature'}`, 'commander', commanderId, decksGroup?.id ?? null) as { id: number };
+  const deck1Loc = insertDeckLoc.get('Standard Aggro', 'Deck location for Standard Aggro', 'deck', decksGroup?.id ?? null, deck1.id) as { id: number };
+  const deck2Loc = insertDeckLoc.get('Commander Goodstuff', 'Deck location for Commander Goodstuff', 'deck', decksGroup?.id ?? null, deck2.id) as { id: number };
+
+  const insertDeckItem = sqlite.prepare(
+    'INSERT INTO collection_items (card_id, location_id, deck_id, quantity, condition, purchase_price, price_autofilled) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+
+  if (commanderId) {
+    insertDeckItem.run(commanderId, deck2Loc.id, deck2.id, 1, 'NM', null, 1);
+  }
+
+  const deckCards = sqlite.prepare('SELECT id FROM scryfall_cards ORDER BY RANDOM() LIMIT 40')
+    .all() as Array<{ id: string }>;
+
+  for (let i = 0; i < Math.min(15, deckCards.length); i++) {
+    insertDeckItem.run(deckCards[i].id, deck1Loc.id, deck1.id, Math.floor(Math.random() * 3) + 1, 'NM', null, 1);
+  }
+  let deck2Count = 0;
+  for (let i = 15; i < Math.min(40, deckCards.length) && deck2Count < 60; i++) {
+    insertDeckItem.run(deckCards[i].id, deck2Loc.id, deck2.id, 1, 'NM', null, 1);
+    deck2Count++;
+  }
 
   if (bindersGroup) {
     const insertLoc = sqlite.prepare('INSERT INTO locations (name, description, group_id, type) VALUES (?, ?, ?, ?) RETURNING id');
@@ -91,6 +128,14 @@ export function applyDemo() {
       const price = parseFloat(prices.usd || prices.usd_foil || '0') || null;
       insertItem.run(card.id, item.locId, item.count, 'NM', price, price ? 0 : 1);
     }
+
+    if (demoCardIds.length > 6) {
+      const prices = JSON.parse(demoCardIds[6].prices);
+      const price = parseFloat(prices.usd || prices.usd_foil || '0') || null;
+      sqlite.prepare(
+        'INSERT INTO collection_items (card_id, location_id, destination_id, quantity, condition, purchase_price, price_autofilled) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(demoCardIds[6].id, binder1.id, deck1Loc.id, 1, 'NM', price, price ? 0 : 1);
+    }
   }
 
   if (bulkGroup) {
@@ -109,41 +154,6 @@ export function applyDemo() {
         insertItem.run(bulkCards[i].id, bulkLoc.id, Math.floor(Math.random() * 10) + 1, 'LP', null, 1);
       }
     }
-  }
-
-  const insertDeck = sqlite.prepare(
-    "INSERT INTO decks (name, description, deck_type, commander_card_id) VALUES (?, ?, ?, ?) RETURNING id",
-  );
-  const commander = sqlite.prepare(
-    "SELECT id, name FROM scryfall_cards WHERE type_line LIKE 'Legendary Creature%' AND legalities LIKE '%\"commander\":\"legal\"%' ORDER BY RANDOM() LIMIT 1",
-  ).get() as { id: string; name: string } | undefined;
-  const commanderId = commander?.id ?? null;
-
-  const deck1 = insertDeck.get('Standard Aggro', 'A fast red-based standard deck', 'standard', null) as { id: number };
-  const deck2 = insertDeck.get('Commander Goodstuff', `Casual commander deck led by ${commander?.name ?? 'a legendary creature'}`, 'commander', commanderId) as { id: number };
-
-  const insertDeckItem = sqlite.prepare(
-    'INSERT INTO collection_items (card_id, location_id, deck_id, quantity, condition, purchase_price, price_autofilled) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  );
-
-  const locs = sqlite.prepare('SELECT id FROM locations ORDER BY RANDOM()').all() as Array<{ id: number }>;
-
-  if (commanderId && locs.length > 0) {
-    insertDeckItem.run(commanderId, locs[0].id, deck2.id, 1, 'NM', null, 1);
-  }
-
-  const deckCards = sqlite.prepare('SELECT id FROM scryfall_cards ORDER BY RANDOM() LIMIT 40')
-    .all() as Array<{ id: string }>;
-
-  for (let i = 0; i < Math.min(15, deckCards.length); i++) {
-    const loc = locs[i % locs.length];
-    insertDeckItem.run(deckCards[i].id, loc.id, deck1.id, Math.floor(Math.random() * 3) + 1, 'NM', null, 1);
-  }
-  let deck2Count = 0;
-  for (let i = 15; i < Math.min(40, deckCards.length) && deck2Count < 60; i++) {
-    const loc = locs[(deck2Count) % locs.length];
-    insertDeckItem.run(deckCards[i].id, loc.id, deck2.id, 1, 'NM', null, 1);
-    deck2Count++;
   }
 }
 
@@ -172,7 +182,7 @@ dataRouter.get('/export', (_req, res) => {
   const movementHistory = db.select().from(schema.movementHistory).all();
 
   res.json({
-    version: 3,
+    version: 4,
     exportedAt: new Date().toISOString(),
     locationGroups,
     locations,
@@ -248,7 +258,7 @@ dataRouter.post('/import', (req, res) => {
 
       if (data.locations) {
         const insertLoc = sqlite.prepare(
-          'INSERT INTO locations (name, description, group_id) VALUES (?, ?, ?) RETURNING id',
+          'INSERT INTO locations (name, description, group_id, type, built_in, deck_id) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
         );
         const findLoc = sqlite.prepare('SELECT id FROM locations WHERE name = ?');
 
@@ -256,15 +266,15 @@ dataRouter.post('/import', (req, res) => {
           const mappedGroupId = l.groupId ? (groupIdMap.get(l.groupId) ?? null) : null;
           if (mode === 'replace') {
             sqlite.prepare(
-              'INSERT INTO locations (id, name, description, group_id) VALUES (?, ?, ?, ?)',
-            ).run(l.id, l.name, l.description ?? null, mappedGroupId);
+              'INSERT INTO locations (id, name, description, group_id, type, built_in, deck_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            ).run(l.id, l.name, l.description ?? null, mappedGroupId, l.type ?? 'binder', l.builtIn ?? 0, l.deckId ?? null);
             locationIdMap.set(l.id, l.id);
           } else {
             const existing = findLoc.get(l.name) as { id: number } | undefined;
             if (existing) {
               locationIdMap.set(l.id, existing.id);
             } else {
-              const result = insertLoc.get(l.name, l.description ?? null, mappedGroupId) as { id: number };
+              const result = insertLoc.get(l.name, l.description ?? null, mappedGroupId, l.type ?? 'binder', l.builtIn ?? 0, l.deckId ?? null) as { id: number };
               locationIdMap.set(l.id, result.id);
             }
           }

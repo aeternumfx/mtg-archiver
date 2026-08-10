@@ -6,9 +6,9 @@ export const locationsRouter = Router();
 
 locationsRouter.get('/', (_req, res) => {
   const locations = db.all<{
-    id: number; name: string; description: string | null; type: string; createdAt: string; cardCount: number; groupId: number | null;
+    id: number; name: string; description: string | null; type: string; createdAt: string; cardCount: number; groupId: number | null; deckId: number | null;
   }>(sql`
-    SELECT l.id, l.name, l.description, l.type, l.created_at as createdAt, l.group_id as groupId, l.built_in as builtIn,
+    SELECT l.id, l.name, l.description, l.type, l.created_at as createdAt, l.group_id as groupId, l.built_in as builtIn, l.deck_id as deckId,
       COALESCE(SUM(ci.quantity), 0) as cardCount
     FROM locations l
     LEFT JOIN collection_items ci ON ci.location_id = l.id
@@ -48,6 +48,7 @@ locationsRouter.put('/:id', (req, res) => {
   const loc = db.select().from(schema.locations).where(eq(schema.locations.id, Number(req.params.id))).get();
   if (!loc) return res.status(404).json({ error: 'Location not found' });
   if (loc.builtIn) return res.status(400).json({ error: 'Cannot edit a built-in location' });
+  if (loc.deckId) return res.status(400).json({ error: 'This location belongs to a deck. Edit the deck instead.' });
   try {
     const updated = db.update(schema.locations)
       .set({ name: name?.trim() ?? loc.name, description: description ?? loc.description, type: type ?? loc.type })
@@ -67,6 +68,7 @@ locationsRouter.delete('/:id', (req, res) => {
   const loc = db.select().from(schema.locations).where(eq(schema.locations.id, id)).get();
   if (!loc) return res.status(404).json({ error: 'Location not found' });
   if (loc.builtIn) return res.status(400).json({ error: 'Cannot delete a built-in location' });
+  if (loc.deckId) return res.status(400).json({ error: 'This location belongs to a deck. Delete the deck instead.' });
 
   const itemCount = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.locationId, id)).all().length;
   if (itemCount > 0) {

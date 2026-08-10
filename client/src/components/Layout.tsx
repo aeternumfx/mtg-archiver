@@ -3,10 +3,11 @@ import {
   AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending } from '@tabler/icons-react';
+import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import SyncBanner from './SyncBanner';
 import type { SyncStatus } from '../types';
+import { IS_DEMO } from '../config';
 
 const navItems: Array<{ label: string; path: string; icon: any; badge?: string }> = [
   { label: 'Dashboard', path: '/', icon: IconHome },
@@ -31,6 +32,7 @@ function syncAge(lastSync: string | null): { label: string; color: string; hours
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [opened, { toggle }] = useDisclosure();
   const [syncOpened, { open: openSync, close: closeSync }] = useDisclosure(false);
+  const [currencyOpened, { open: openCurrency, close: closeCurrency }] = useDisclosure(false);
   const location = useLocation();
   const navigate = useNavigate();
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ syncing: false, lastSync: null, progress: null, stage: null });
@@ -84,6 +86,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <IconCards size={26} />
             <Title order={3}>MTG Archiver</Title>
+            {IS_DEMO && (
+              <Badge
+                variant="filled"
+                color="orange"
+                size="lg"
+                radius="sm"
+                styles={{ root: { fontSize: 14, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', boxShadow: '0 0 12px rgba(255,140,0,0.5)' } }}
+              >
+                DEMO INSTANCE
+              </Badge>
+            )}
           </Group>
           <Group gap="xs">
             <Tooltip label={`Last sync: ${ago}. Click to resync.`}>
@@ -98,6 +111,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   {syncStatus.syncing ? 'Syncing...' : age.label}
                 </Badge>
               </Group>
+            </Tooltip>
+            <Tooltip label="Prices shown in USD">
+              <Badge size="sm" variant="light" color="gray" leftSection={<IconCurrencyDollar size={12} />}
+                style={{ cursor: 'pointer' }} onClick={openCurrency}>
+                USD
+              </Badge>
             </Tooltip>
             <ActionIcon variant="subtle" size="sm" onClick={() => navigate('/settings')}>
               <IconSettings size={18} />
@@ -142,6 +161,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <Group justify="flex-end">
           <Button variant="default" onClick={closeSync}>Cancel</Button>
           <Button color="blue" onClick={handleResync}>Sync Now</Button>
+        </Group>
+      </Modal>
+
+      <Modal opened={currencyOpened} onClose={closeCurrency} title="Currency" size="sm">
+        <Text size="sm" mb="md">
+          All prices shown in this app are in <b>USD</b>.
+        </Text>
+        <Text size="sm" mb="md" c="dimmed">
+          Support for more currencies is planned to be added later.
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={closeCurrency}>Close</Button>
         </Group>
       </Modal>
     </AppShell>

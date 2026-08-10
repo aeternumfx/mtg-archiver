@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Box, Text, Group, Button, Modal, Select, ScrollArea, Badge, ActionIcon, Tooltip } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconExternalLink, IconArchive, IconPlus } from '@tabler/icons-react';
+import { IconExternalLink, IconArchive, IconPlus, IconBolt, IconCalendarClock } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { Location } from '../types';
 import { SetSymbol, GhostThumb } from './CardDisplay';
@@ -20,11 +20,12 @@ interface InternalCopy {
   setName: string; setCode: string; collectorNumber: string;
 }
 
-export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: {
+export function WantlistFulfilActions({ item, locations, hasInternal, onDone, currentLocationId }: {
   item: WantlistFulfilItem;
   locations: Location[];
   hasInternal: boolean;
   onDone: () => void;
+  currentLocationId?: number | null;
 }) {
   const [externalOpened, { open: openExternal, close: closeExternal }] = useDisclosure(false);
   const [internalOpened, { open: openInternal, close: closeInternal }] = useDisclosure(false);
@@ -33,9 +34,14 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
   const [internalLoading, setInternalLoading] = useState(false);
   const [fulfilling, setFulfilling] = useState(false);
 
+  const hereId = currentLocationId != null ? currentLocationId : (item.destinationId ?? null);
+  const hereName = locations.find(l => l.id === hereId)?.name || 'this location';
+
   const openFulfilExternal = () => {
     const inbox = locations.find(l => l.builtIn || l.name === 'Inbox');
-    setFulfilLoc(locations.length > 0 ? String(inbox?.id ?? locations[0].id) : null);
+    setFulfilLoc(hereId != null
+      ? String(hereId)
+      : (locations.length > 0 ? String(inbox?.id ?? locations[0].id) : null));
     openExternal();
   };
 
@@ -52,15 +58,21 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
         notifications.show({ title: 'Error', message: `Could not resolve "${item.cardName}" to a card`, color: 'red' });
         return;
       }
+      const scheduled = currentLocationId != null
+        ? (Number(fulfilLoc) === currentLocationId ? null : currentLocationId)
+        : (item.destinationId ?? undefined);
       await api.wantlist.fulfil(item.id, 1).catch(() => ({ removed: true, goal: null }));
       await api.collection.add({
         cardId,
         locationId: Number(fulfilLoc),
         quantity: 1,
         forceNew: true,
-        destinationId: item.destinationId ?? undefined,
+        destinationId: scheduled ?? undefined,
       });
-      notifications.show({ title: 'Fulfilled', message: `${item.cardName} added${item.destinationId ? ' and move scheduled' : ''}`, color: 'green' });
+      const msg = currentLocationId != null && Number(fulfilLoc) !== currentLocationId
+        ? `${item.cardName} added elsewhere, scheduled to move to ${hereName}`
+        : `${item.cardName} added${item.destinationId && !currentLocationId ? ' and move scheduled' : ''}`;
+      notifications.show({ title: 'Fulfilled', message: msg, color: 'green' });
       closeExternal(); onDone();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -79,6 +91,8 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
       const items = (data.groups || []).flatMap((g: any) => g.items || []);
       setInternalCopies(items
         .filter((i: any) => i.card && i.card.name.toLowerCase() === item.cardName.toLowerCase())
+        .filter((i: any) => !item.setCode || (i.card.setCode || '').toLowerCase() === item.setCode.toLowerCase())
+        .filter((i: any) => !item.collectorNumber || i.card.collectorNumber === item.collectorNumber)
         .map((i: any) => ({
           id: i.id, locationId: i.locationId, condition: i.condition, foil: i.foil, quantity: i.quantity,
           setName: i.card.setName, setCode: i.card.setCode, collectorNumber: i.card.collectorNumber,
@@ -87,14 +101,25 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
     setInternalLoading(false);
   };
 
-  const handleFulfilInternal = async (copyId: number) => {
+  const handleFulfilInternal = async (copy: InternalCopy, mode: 'now' | 'schedule') => {
     setFulfilling(true);
     try {
-      if (item.destinationId) {
-        await api.collection.splitCopy(copyId, item.destinationId);
+      if (currentLocationId != null) {
+        if (mode === 'now') {
+          if (copy.locationId !== currentLocationId) {
+            await api.collection.move([{ id: copy.id, quantity: 1 }], currentLocationId);
+          }
+        } else {
+          await api.collection.splitCopy(copy.id, currentLocationId);
+        }
+      } else if (item.destinationId) {
+        await api.collection.splitCopy(copy.id, item.destinationId);
       }
       await api.wantlist.fulfil(item.id, 1).catch(() => {});
-      notifications.show({ title: 'Fulfilled', message: item.destinationId ? 'Move scheduled to fulfil this want' : 'Wantlist entry fulfilled', color: 'green' });
+      const msg = currentLocationId != null
+        ? (mode === 'now' ? `Filled here in ${hereName}` : `Scheduled to move to ${hereName}`)
+        : (item.destinationId ? 'Move scheduled to fulfil this want' : 'Wantlist entry fulfilled');
+      notifications.show({ title: 'Fulfilled', message: msg, color: 'green' });
       closeInternal(); onDone();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -105,10 +130,10 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
 
   return (
     <>
-      <Tooltip label="Fulfil externally — add a new card at a location">
+      <Tooltip label="Fulfil externally — add a new card">
         <ActionIcon variant="subtle" color="green" size="sm" onClick={openFulfilExternal}><IconExternalLink size={14} /></ActionIcon>
       </Tooltip>
-      <Tooltip label={hasInternal ? 'Fulfil internally — use an existing copy' : 'No matching copies in your collection'}>
+      <Tooltip label={hasInternal ? 'Fulfil from collection — use an existing copy' : 'No matching copies in your collection'}>
         <ActionIcon variant="subtle" color={hasInternal ? 'blue' : 'gray'} size="sm" disabled={!hasInternal} onClick={openFulfilInternal}><IconArchive size={14} /></ActionIcon>
       </Tooltip>
 
@@ -118,23 +143,31 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
           <div style={{ flex: 1 }}>
             <Text fw={600} size="sm">{item.cardName}</Text>
             {item.setCode && <Text size="xs" c="dimmed">{item.setCode.toUpperCase()} #{item.collectorNumber}</Text>}
-            {item.destinationId && (
-              <Text size="xs" c="dimmed">→ {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}</Text>
+            {currentLocationId != null ? (
+              <Text size="xs" c="dimmed">Filling into <b>{hereName}</b></Text>
+            ) : (
+              item.destinationId && (
+                <Text size="xs" c="dimmed">→ {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}</Text>
+              )
             )}
           </div>
         </Group>
         <Select label="Add card to location" data={locations.map(l => ({ value: String(l.id), label: l.name }))}
-          value={fulfilLoc} onChange={setFulfilLoc} mb="md" searchable />
+          value={fulfilLoc} onChange={setFulfilLoc} mb="xs" searchable />
+        {currentLocationId != null && fulfilLoc !== String(currentLocationId) && (
+          <Text size="xs" c="dimmed" mb="sm">Card will be scheduled to move to <b>{hereName}</b>.</Text>
+        )}
         <Button onClick={handleFulfilExternal} fullWidth loading={fulfilling} leftSection={<IconPlus size={16} />}>
           Add & Fulfil
         </Button>
       </Modal>
 
-      <Modal opened={internalOpened} onClose={closeInternal} title={`Fulfil Internally — ${item.cardName}`} size="md" centered>
+      <Modal opened={internalOpened} onClose={closeInternal} title={`Fulfil from Collection — ${item.cardName}`} size="md" centered>
+        {currentLocationId != null && <Text size="xs" c="dimmed" mb="sm">Filling into <b>{hereName}</b>. Pick a copy below.</Text>}
         {internalLoading ? (
           <Text c="dimmed" ta="center" py="xl">Loading collection copies...</Text>
         ) : internalCopies.length === 0 ? (
-          <Text c="dimmed" ta="center" py="xl">No copies of this card found in your collection.</Text>
+          <Text c="dimmed" ta="center" py="xl">No matching copies of this card found in your collection.</Text>
         ) : (
           <ScrollArea h={320}>
             {internalCopies.map(c => (
@@ -152,9 +185,22 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone }: 
                     <Text size="xs" c="dimmed">@ {locations.find(l => l.id === c.locationId)?.name || `#${c.locationId}`}</Text>
                   </Group>
                 </div>
-                <Button size="compact-xs" variant="light" color="blue" loading={fulfilling} onClick={() => handleFulfilInternal(c.id)}>
-                  Use this copy
-                </Button>
+                {currentLocationId != null ? (
+                  <Group gap={4} wrap="nowrap">
+                    <Button size="compact-xs" variant="light" color="blue" loading={fulfilling} leftSection={<IconBolt size={12} />}
+                      onClick={() => handleFulfilInternal(c, 'now')}>
+                      Move now
+                    </Button>
+                    <Button size="compact-xs" variant="light" color="teal" loading={fulfilling} leftSection={<IconCalendarClock size={12} />}
+                      onClick={() => handleFulfilInternal(c, 'schedule')}>
+                      Schedule
+                    </Button>
+                  </Group>
+                ) : (
+                  <Button size="compact-xs" variant="light" color="blue" loading={fulfilling} onClick={() => handleFulfilInternal(c, 'now')}>
+                    Use this copy
+                  </Button>
+                )}
               </Group>
             ))}
           </ScrollArea>

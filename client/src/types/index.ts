@@ -74,6 +74,7 @@ export interface Location {
   cardCount?: number;
   groupId?: number | null;
   builtIn?: number;
+  deckId?: number | null;
 }
 
 export interface LocationGroup {

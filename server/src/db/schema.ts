@@ -50,6 +50,7 @@ export const locations = sqliteTable('locations', {
   description: text('description'),
   type: text('type').notNull().default('binder'),
   groupId: integer('group_id').references(() => locationGroups.id),
+  deckId: integer('deck_id').references(() => decks.id),
   builtIn: integer('built_in').notNull().default(0),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
 });
@@ -63,6 +64,9 @@ export const decks = sqliteTable('decks', {
   commanderCardId: text('commander_card_id').references(() => scryfallCards.id),
   partnerCardId: text('partner_card_id').references(() => scryfallCards.id),
   backgroundCardId: text('background_card_id').references(() => scryfallCards.id),
+  commanderItemId: integer('commander_item_id'),
+  partnerItemId: integer('partner_item_id'),
+  backgroundItemId: integer('background_item_id'),
   groupId: integer('group_id').references(() => locationGroups.id),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
 });
@@ -140,6 +144,7 @@ export const wantlistItems = sqliteTable('wantlist_items', {
   notes: text('notes'),
   destinationId: integer('destination_id'),
   collectionGoalId: integer('collection_goal_id'),
+  deckRequiredId: integer('deck_required_id'),
   persistent: integer('persistent').notNull().default(0),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
 });

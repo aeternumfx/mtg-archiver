@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useRef, useState, useCallback, useEffect, type ReactNode } from 'react';
 import { Paper, Group, Text, Button, Progress, ActionIcon } from '@mantine/core';
 import { IconRotate, IconX } from '@tabler/icons-react';
 
@@ -55,6 +55,23 @@ export function UndoProvider({ children }: { children: ReactNode }) {
     try { await e.undo(); } catch {}
     clear();
   }, [entry, clear]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z')) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      const typing =
+        tag === 'TEXTAREA' ||
+        !!el?.isContentEditable ||
+        (tag === 'INPUT' && (!!(el as HTMLInputElement).value || (el as HTMLInputElement).type !== 'text'));
+      if (typing) return;
+      e.preventDefault();
+      handleUndo();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleUndo]);
 
   return (
     <UndoContext.Provider value={{ push }}>

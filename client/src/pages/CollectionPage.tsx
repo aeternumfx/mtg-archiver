@@ -111,11 +111,12 @@ const ItemRow = memo(function ItemRow({ row, selected, locations, onToggle, onEd
   );
 });
 
-const GhostRow = memo(function GhostRow({ w, locations, hasInternal, onDone }: {
+const GhostRow = memo(function GhostRow({ w, locations, hasInternal, onDone, currentLocationId }: {
   w: WantlistGhost;
   locations: Location[];
   hasInternal: boolean;
   onDone: () => void;
+  currentLocationId: number | null;
 }) {
   return (
     <Group p="sm" gap="sm" wrap="nowrap" opacity={0.55} style={{ filter: 'grayscale(0.6)' }}>
@@ -132,7 +133,7 @@ const GhostRow = memo(function GhostRow({ w, locations, hasInternal, onDone }: {
         )}
       </div>
       <Badge size="xs" variant="light" color="teal">Wantlist</Badge>
-      <WantlistFulfilActions item={w} locations={locations} hasInternal={hasInternal} onDone={onDone} />
+      <WantlistFulfilActions item={w} locations={locations} hasInternal={hasInternal} onDone={onDone} currentLocationId={currentLocationId} />
     </Group>
   );
 });
@@ -185,13 +186,20 @@ export default function CollectionPage() {
   const [collectionNames, setCollectionNames] = useState<Set<string>>(new Set());
   const [goals, setGoals] = useState<Array<{ id: number; locationId: number; locationName: string; kind: string; cardName: string | null; setCodes: string | null; targetCount: number | null; fulfilledCount: number; status: string; remaining: number; remainingCost: number; percent: number }>>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ghostDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadWantGhosts = useCallback(async (targetPage = 1) => {
     if (!selectedLoc) { setWantGhosts([]); setGhostTotalPages(1); return; }
     setGhostLoading(true);
     try {
       const [res, names, g] = await Promise.all([
-        api.wantlist.paged(targetPage, 40, Number(selectedLoc)),
+        api.wantlist.paged(targetPage, 40, {
+          destinationId: Number(selectedLoc),
+          q: search,
+          sort,
+          order,
+          filters,
+        }),
         api.collection.names().catch(() => []),
         api.collectionGoals.list().catch(() => []),
       ]);
@@ -201,9 +209,16 @@ export default function CollectionPage() {
       setGoals(g);
     } catch { setWantGhosts([]); setGhostTotalPages(1); }
     setGhostLoading(false);
-  }, [selectedLoc]);
+  }, [selectedLoc, search, sort, order, filters]);
 
-  useEffect(() => { setGhostPage(1); loadWantGhosts(); }, [loadWantGhosts]);
+  useEffect(() => {
+    if (ghostDebounceRef.current) clearTimeout(ghostDebounceRef.current);
+    ghostDebounceRef.current = setTimeout(() => {
+      setGhostPage(1);
+      loadWantGhosts(1);
+    }, 250);
+    return () => { if (ghostDebounceRef.current) clearTimeout(ghostDebounceRef.current); };
+  }, [loadWantGhosts]);
 
   const loadGroups = useCallback(async () => {
     setLoading(true);
@@ -273,6 +288,16 @@ export default function CollectionPage() {
   }, []);
 
   const allItems = groups.flatMap(g => g.items);
+
+  const scheduleSourceLocIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const key of selectedKeys) {
+      const itemId = Number(key.split('-')[0]);
+      const item = allItems.find(i => i.id === itemId);
+      if (item) ids.add(item.locationId);
+    }
+    return ids;
+  }, [selectedKeys, allItems]);
 
   const lastSelectRef = useRef<string | null>(null);
 
@@ -830,7 +855,7 @@ export default function CollectionPage() {
                 isSingle expanded={false} onToggle={() => {}}
                 thumb={<GhostThumb name={ghost.cardName} cardId={ghost.cardId} />}
               >
-                <GhostRow w={ghost} locations={locations} hasInternal={collectionNames.has(ghost.cardName)} onDone={() => loadWantGhosts(ghostPage)} />
+                <GhostRow w={ghost} locations={locations} hasInternal={collectionNames.has(ghost.cardName)} onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
               </CardGroup>
             );
           }
@@ -881,7 +906,7 @@ export default function CollectionPage() {
                 {ghosts.map(w => (
                   <GhostRow key={`ghost-${w.id}`} w={w} locations={locations}
                     hasInternal={collectionNames.has(w.cardName)}
-                    onDone={() => loadWantGhosts(ghostPage)} />
+                    onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
                 ))}
               </Box>
             </CardGroup>
@@ -904,7 +929,7 @@ export default function CollectionPage() {
                 isSingle expanded={false} onToggle={() => {}}
                 thumb={<GhostThumb name={name} cardId={rep.cardId} />}
               >
-                <GhostRow w={ghosts[0]} locations={locations} hasInternal={collectionNames.has(name)} onDone={() => loadWantGhosts(ghostPage)} />
+                <GhostRow w={ghosts[0]} locations={locations} hasInternal={collectionNames.has(name)} onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
               </CardGroup>
             );
           }
@@ -919,7 +944,7 @@ export default function CollectionPage() {
                 {ghosts.map(w => (
                   <GhostRow key={`ghost-${w.id}`} w={w} locations={locations}
                     hasInternal={collectionNames.has(name)}
-                    onDone={() => loadWantGhosts(ghostPage)} />
+                    onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
                 ))}
               </Box>
             </CardGroup>
@@ -989,7 +1014,7 @@ export default function CollectionPage() {
 
       <Modal opened={bulkScheduleOpened} onClose={closeBulkSchedule} title={`Schedule Move — ${selectedKeys.size} card(s)`} size="sm" centered>
         <Select label="Destination" placeholder="Select destination" clearable searchable
-          data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+          data={locations.filter(l => !scheduleSourceLocIds.has(l.id)).map(l => ({ value: String(l.id), label: l.name }))}
           value={bulkDestValue} onChange={setBulkDestValue} mb="md"
         />
         <Group justify="flex-end">

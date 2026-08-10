@@ -1,4 +1,5 @@
 import { useState, useEffect, Component, type ReactNode, type CSSProperties } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput, Textarea,
   LoadingOverlay, Box, Paper, Badge, ActionIcon, Tooltip, ScrollArea, Select, Switch, NumberInput, SegmentedControl, Collapse,
@@ -6,7 +7,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
@@ -23,6 +24,10 @@ interface Deck {
   commanderCardId: string | null;
   partnerCardId: string | null;
   backgroundCardId: string | null;
+  commanderItemId: number | null;
+  partnerItemId: number | null;
+  backgroundItemId: number | null;
+  locationId: number | null;
   createdAt: string;
   cardCount: number;
 }
@@ -50,10 +55,24 @@ interface RequiredCard {
   quantity: number;
 }
 
+type PickEntry = {
+  key: string;
+  name: string;
+  typeLine: string | null;
+  copyInfo?: string;
+  cardId: string | null;
+  itemId: number | null;
+  reqId?: number;
+  card: CollectionItem['card'] | null;
+  thumb: ReactNode;
+};
+
 const CONDITION_COLORS: Record<string, string> = {
   M: '#2e7d32', NM: '#00897b', LP: '#1565c0',
   MP: '#f9a825', HP: '#e65100', Dmg: '#c62828',
 };
+
+const PRINTINGS_PAGE_SIZE = 50;
 
 const CID_COLORS: Record<string, string> = {
   W: '#f8d558', U: '#2a6fbf', B: '#444444', R: '#d33f2d', G: '#3f9c47', C: '#666666',
@@ -107,6 +126,7 @@ export default function DecksPage() {
   const [addCardSearch, setAddCardSearch] = useState('');
   const [addCardResults, setAddCardResults] = useState<GroupedCard[]>([]);
   const [addPrintings, setAddPrintings] = useState<Record<string, ScryfallCard[]>>({});
+  const [addPrintingsTotal, setAddPrintingsTotal] = useState<Record<string, number>>({});
   const [addExpanded, setAddExpanded] = useState<Set<string>>(new Set());
   const [addLoadingPrintings, setAddLoadingPrintings] = useState<Set<string>>(new Set());
   const [locations, setLocations] = useState<Location[]>([]);
@@ -135,11 +155,17 @@ export default function DecksPage() {
   const [editCardOpened, { open: openEditCard, close: closeEditCard }] = useDisclosure(false);
   const [moveItems, setMoveItems] = useState<CollectionItem[]>([]);
   const [moveDestLoc, setMoveDestLoc] = useState<string | null>(null);
+  const [moveMode, setMoveMode] = useState<'move' | 'schedule'>('move');
   const [moveOpened, { open: openMove, close: closeMove }] = useDisclosure(false);
+  const [ghostMoveReq, setGhostMoveReq] = useState<RequiredCard | null>(null);
+  const [ghostMoveDestType, setGhostMoveDestType] = useState<'location' | 'deck'>('location');
+  const [ghostMoveDestId, setGhostMoveDestId] = useState<string | null>(null);
   const [fillReqId, setFillReqId] = useState<number | null>(null);
   const [fillCardName, setFillCardName] = useState('');
   const [fillCollectionItems, setFillCollectionItems] = useState<CollectionItem[]>([]);
   const [fillOpened, { open: openFill, close: closeFill }] = useDisclosure(false);
+  const [pickAddingId, setPickAddingId] = useState<number | null>(null);
+  const [schedConfirm, setSchedConfirm] = useState<{ item: CollectionItem; mode: 'now' | 'schedule'; source: 'link' | 'fill' } | null>(null);
 
   const loadDecks = async () => {
     setLoading(true);
@@ -193,7 +219,7 @@ export default function DecksPage() {
 
   useEffect(() => {
     const q = addCardSearch.trim();
-    if (q.length < 2) { setAddCardResults([]); setAddPrintings({}); return; }
+    if (q.length < 2) { setAddCardResults([]); setAddPrintings({}); setAddPrintingsTotal({}); return; }
     const timeout = setTimeout(async () => {
       const isSmart = /^[a-z]{2,4}\s*\d+/i.test(q) || /^s:\S+\s+cn:\S+$/i.test(q);
       try {
@@ -218,11 +244,13 @@ export default function DecksPage() {
             lastPrinting: null,
           })));
           setAddPrintings(groups as unknown as Record<string, ScryfallCard[]>);
+          setAddPrintingsTotal({});
           setAddExpanded(new Set());
         } else {
           const res = await api.cards.grouped(q, 1);
           setAddCardResults(res.data);
           setAddPrintings({});
+          setAddPrintingsTotal({});
           setAddExpanded(new Set());
         }
       } catch { setAddCardResults([]); }
@@ -252,6 +280,8 @@ export default function DecksPage() {
     return () => clearTimeout(timeout);
   }, [commanderSearch]);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const openDeck = (deck: Deck) => {
     setSelectedDeck(deck);
     setAddCardSearch('');
@@ -259,26 +289,51 @@ export default function DecksPage() {
     loadDeckCards(deck.id);
   };
 
+  useEffect(() => {
+    const deckId = searchParams.get('deck');
+    if (!deckId || selectedDeck) return;
+    const d = decks.find(x => String(x.id) === deckId);
+    if (d) openDeck(d);
+  }, [decks, searchParams, selectedDeck]);
+
   const closeDeck = () => {
     setSelectedDeck(null);
     setDeckCards([]);
     setRequiredCards([]);
+    setSearchParams({}, { replace: true });
   };
 
-  const toggleAddPrintings = async (name: string) => {
+  const loadPrintings = async (name: string, page: number) => {
+    setAddLoadingPrintings(prev => new Set(prev).add(name));
+    try {
+      const res = await api.cards.printingsPaged(name, page, PRINTINGS_PAGE_SIZE);
+      setAddPrintings(prev => {
+        const existing = prev[name] || [];
+        const merged = page === 1 ? res.data : [...existing, ...res.data];
+        return { ...prev, [name]: merged };
+      });
+      setAddPrintingsTotal(prev => ({ ...prev, [name]: res.total }));
+    } catch {}
+    setAddLoadingPrintings(prev => { const n = new Set(prev); n.delete(name); return n; });
+  };
+
+  const toggleAddPrintings = (name: string) => {
     if (addExpanded.has(name)) {
       setAddExpanded(prev => { const n = new Set(prev); n.delete(name); return n; });
       return;
     }
     setAddExpanded(prev => new Set(prev).add(name));
-    if (!addPrintings[name]) {
-      setAddLoadingPrintings(prev => new Set(prev).add(name));
-      try {
-        const cards = await api.cards.printings(name) as unknown as ScryfallCard[];
-        setAddPrintings(prev => ({ ...prev, [name]: cards }));
-      } catch {}
-      setAddLoadingPrintings(prev => { const n = new Set(prev); n.delete(name); return n; });
+    if (!addPrintings[name] || addPrintings[name].length === 0) {
+      loadPrintings(name, 1);
     }
+  };
+
+  const loadMorePrintings = (name: string) => {
+    const loaded = addPrintings[name]?.length || 0;
+    const total = addPrintingsTotal[name] ?? loaded;
+    if (loaded >= total) return;
+    const nextPage = Math.floor(loaded / PRINTINGS_PAGE_SIZE) + 1;
+    loadPrintings(name, nextPage);
   };
 
   const handleAddExternal = (card: ScryfallCard) => {
@@ -314,7 +369,7 @@ export default function DecksPage() {
       const created = await api.decks.addRequired(selectedDeck.id, {
         cardId: card.id, cardName: card.name, setCode: card.setCode, collectorNumber: card.collectorNumber, quantity: 1,
       });
-      const wl = await api.wantlist.add({ cardId: card.id, cardName: card.name, setCode: card.setCode, collectorNumber: card.collectorNumber, notes: `Wanted for deck: ${selectedDeck.name}`, quantity: 1 }).catch(() => null);
+      const wl = await api.wantlist.add({ cardId: card.id, cardName: card.name, setCode: card.setCode, collectorNumber: card.collectorNumber, notes: `Wanted for deck: ${selectedDeck.name}`, quantity: 1, deckRequiredId: created.id, destinationId: selectedDeck.locationId }).catch(() => null);
       pushUndo(`${card.name} added as ghost card`, async () => {
         await api.decks.removeRequired(selectedDeck.id, created.id).catch(() => {});
         if (wl?.id) await api.wantlist.remove(wl.id).catch(() => {});
@@ -333,7 +388,7 @@ export default function DecksPage() {
     if (!selectedDeck) return;
     try {
       const created = await api.decks.addRequired(selectedDeck.id, { cardName: name, quantity: 1 });
-      const wl = await api.wantlist.add({ cardName: name, quantity: 1, notes: `Wanted for deck: ${selectedDeck.name}` }).catch(() => null);
+      const wl = await api.wantlist.add({ cardName: name, quantity: 1, notes: `Wanted for deck: ${selectedDeck.name}`, deckRequiredId: created.id, destinationId: selectedDeck.locationId }).catch(() => null);
       pushUndo(`${name} added as ghost card`, async () => {
         await api.decks.removeRequired(selectedDeck.id, created.id).catch(() => {});
         if (wl?.id) await api.wantlist.remove(wl.id).catch(() => {});
@@ -360,69 +415,51 @@ export default function DecksPage() {
     }
   };
 
-  const handleLinkFromCollection = async (itemId: number) => {
+  const doDeckAdd = async (item: CollectionItem, mode: 'now' | 'schedule') => {
     if (!selectedDeck) return;
+    const schedule = mode === 'schedule';
+    if (schedule && !selectedDeck.locationId) {
+      notifications.show({ title: 'Deck has no location', message: 'This deck is missing its location. Recreate it or contact support.', color: 'yellow' });
+      return;
+    }
+    setPickAddingId(item.id);
     try {
-      await api.decks.linkFromCollection(selectedDeck.id, itemId);
-      pushUndo('Card added to deck from collection', async () => {
-        await api.decks.removeCard(selectedDeck.id, itemId).catch(() => {});
+      await api.decks.linkFromCollection(selectedDeck.id, item.id, schedule);
+      pushUndo(`${item.card.name} added to deck`, async () => {
+        await api.decks.removeCard(selectedDeck.id, item.id).catch(() => {});
+        await api.collection.update(item.id, { destinationId: item.destinationId } as any).catch(() => {});
         loadDeckCards(selectedDeck.id);
       }, 'Undo add');
-      notifications.show({ title: 'Added', message: 'Card added to deck from collection', color: 'green' });
+      notifications.show({
+        title: mode === 'now' ? 'Moved' : 'Scheduled',
+        message: mode === 'now' ? `${item.card.name} added to deck` : `${item.card.name} added to deck, move scheduled`,
+        color: 'green',
+      });
       closeCollectionPick();
       loadDeckCards(selectedDeck.id);
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    } finally {
+      setPickAddingId(null);
     }
   };
 
-  const handleRemoveCard = async (itemId: number) => {
-    if (!selectedDeck) return;
-    const item = deckCards.find(i => i.id === itemId);
-    const restore: Record<string, string | null> = {};
-    try {
-      await api.decks.removeCard(selectedDeck.id, itemId);
-      if (item) {
-        if (selectedDeck.commanderCardId === item.card.id) restore.commanderCardId = selectedDeck.commanderCardId;
-        if (selectedDeck.partnerCardId === item.card.id) restore.partnerCardId = selectedDeck.partnerCardId;
-        if (selectedDeck.backgroundCardId === item.card.id) restore.backgroundCardId = selectedDeck.backgroundCardId;
-        if (Object.keys(restore).length > 0) {
-          const cleared = Object.fromEntries(Object.keys(restore).map(k => [k, null])) as Record<string, string | null>;
-          const updated = await api.decks.update(selectedDeck.id, cleared);
-          setSelectedDeck(prev => prev ? { ...prev, ...updated } : prev);
-        }
-        pushUndo(`${item.card.name} removed from deck`, async () => {
-          await api.decks.linkFromCollection(selectedDeck.id, itemId).catch(() => {});
-          if (Object.keys(restore).length > 0) {
-            const restored = await api.decks.update(selectedDeck.id, restore).catch(() => null);
-            if (restored) setSelectedDeck(prev => prev ? { ...prev, ...restored } : prev);
-          }
-          loadDeckCards(selectedDeck.id);
-        }, 'Undo remove');
-      }
-      notifications.show({ title: 'Removed', message: 'Card removed from deck', color: 'green' });
-      loadDeckCards(selectedDeck.id);
-    } catch (err: any) {
-      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+  const handleDeckPickAction = (item: CollectionItem, mode: 'now' | 'schedule', source: 'link' | 'fill') => {
+    if (item.destinationId) {
+      setSchedConfirm({ item, mode, source });
+    } else if (source === 'link') {
+      doDeckAdd(item, mode);
+    } else {
+      doFillCard(item, mode);
     }
   };
 
-  const handleRemoveCopy = async (item: CollectionItem) => {
-    if (!selectedDeck) return;
-    try {
-      if (item.quantity > 1) {
-        await api.collection.update(item.id, { quantity: item.quantity - 1 } as any);
-        pushUndo(`Copy of ${item.card.name} removed from deck`, async () => {
-          await api.collection.update(item.id, { quantity: item.quantity } as any).catch(() => {});
-          loadDeckCards(selectedDeck.id);
-        }, 'Undo remove');
-        loadDeckCards(selectedDeck.id);
-      } else {
-        await handleRemoveCard(item.id);
-      }
-    } catch (err: any) {
-      notifications.show({ title: 'Error', message: err.message, color: 'red' });
-    }
+  const confirmSchedAction = () => {
+    if (!schedConfirm) return;
+    const { item, mode, source } = schedConfirm;
+    setSchedConfirm(null);
+    if (source === 'link') doDeckAdd(item, mode);
+    else doFillCard(item, mode);
   };
 
   const handleRemoveRequired = async (reqId: number) => {
@@ -461,15 +498,27 @@ export default function DecksPage() {
     openFill();
   };
 
-  const handleFillCard = async (itemId: number) => {
+  const doFillCard = async (item: CollectionItem, mode: 'now' | 'schedule') => {
     if (!selectedDeck || fillReqId === null) return;
+    const schedule = mode === 'schedule';
+    if (schedule && !selectedDeck.locationId) {
+      notifications.show({ title: 'Deck has no location', message: 'This deck is missing its location. Recreate it or contact support.', color: 'yellow' });
+      return;
+    }
+    setPickAddingId(item.id);
     try {
-      await api.decks.fillRequired(selectedDeck.id, fillReqId, itemId);
-      notifications.show({ title: 'Filled', message: 'Card added to deck from collection', color: 'green' });
+      await api.decks.fillRequired(selectedDeck.id, fillReqId, item.id, schedule);
+      notifications.show({
+        title: mode === 'now' ? 'Filled' : 'Scheduled',
+        message: mode === 'now' ? 'Card added to deck from collection' : 'Card added to deck, move scheduled',
+        color: 'green',
+      });
       closeFill();
       loadDeckCards(selectedDeck.id);
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    } finally {
+      setPickAddingId(null);
     }
   };
 
@@ -480,6 +529,7 @@ export default function DecksPage() {
         name: form.name.trim(), description: form.description.trim() || undefined,
         deckType: form.deckType, commanderCardId: form.commanderCardId || null,
         partnerCardId: form.partnerCardId || null, backgroundCardId: form.backgroundCardId || null,
+        cardId: form.commanderCardId || undefined,
       });
       notifications.show({ title: 'Created', message: 'Deck created', color: 'green' });
       closeCreate();
@@ -499,6 +549,7 @@ export default function DecksPage() {
         name: form.name.trim(), description: form.description.trim() || null,
         deckType: form.deckType, commanderCardId: form.commanderCardId || null,
         partnerCardId: form.partnerCardId || null, backgroundCardId: form.backgroundCardId || null,
+        cardId: (form.commanderCardId && !selectedDeck?.cardId) ? form.commanderCardId : undefined,
       });
       notifications.show({ title: 'Updated', message: 'Deck updated', color: 'green' });
       closeEdit();
@@ -512,14 +563,36 @@ export default function DecksPage() {
     }
   };
 
-  const handleSetCommandFromDeck = async (cardId: string, mode: 'commander' | 'partner' | 'background') => {
+  const handleSetCommandFromDeck = async (cardId: string, itemId: number | null, mode: 'commander' | 'partner' | 'background') => {
     if (!selectedDeck) return;
     try {
       const updated = await api.decks.update(selectedDeck.id, mode === 'commander'
-        ? { commanderCardId: cardId, partnerCardId: null, backgroundCardId: null }
+        ? {
+            commanderCardId: cardId,
+            commanderItemId: itemId,
+            partnerCardId: selectedDeck.partnerCardId === cardId ? null : selectedDeck.partnerCardId,
+            backgroundCardId: selectedDeck.backgroundCardId === cardId ? null : selectedDeck.backgroundCardId,
+            partnerItemId: selectedDeck.partnerCardId === cardId ? null : selectedDeck.partnerItemId,
+            backgroundItemId: selectedDeck.backgroundCardId === cardId ? null : selectedDeck.backgroundItemId,
+            cardId: selectedDeck.cardId ?? cardId,
+          }
         : mode === 'partner'
-          ? { partnerCardId: cardId, backgroundCardId: null }
-          : { partnerCardId: null, backgroundCardId: cardId });
+          ? {
+              partnerCardId: cardId,
+              partnerItemId: itemId,
+              backgroundCardId: null,
+              backgroundItemId: null,
+              commanderCardId: selectedDeck.commanderCardId === cardId ? null : selectedDeck.commanderCardId,
+              commanderItemId: selectedDeck.commanderCardId === cardId ? null : selectedDeck.commanderItemId,
+            }
+          : {
+              partnerCardId: null,
+              partnerItemId: null,
+              backgroundCardId: cardId,
+              backgroundItemId: itemId,
+              commanderCardId: selectedDeck.commanderCardId === cardId ? null : selectedDeck.commanderCardId,
+              commanderItemId: selectedDeck.commanderCardId === cardId ? null : selectedDeck.commanderItemId,
+            });
       setSelectedDeck(prev => prev ? { ...prev, ...updated } : prev);
       loadDeckCards(selectedDeck.id);
       notifications.show({ title: 'Updated', message: `${mode[0].toUpperCase() + mode.slice(1)} set`, color: 'green' });
@@ -575,7 +648,12 @@ export default function DecksPage() {
     } else if (commanderPickMode === 'background') {
       setForm(f => ({ ...f, backgroundCardId: card.id }));
     } else {
-      setForm(f => ({ ...f, commanderCardId: card.id, partnerCardId: '', backgroundCardId: '' }));
+      setForm(f => ({
+        ...f,
+        commanderCardId: card.id,
+        partnerCardId: f.partnerCardId === card.id ? '' : f.partnerCardId,
+        backgroundCardId: f.backgroundCardId === card.id ? '' : f.backgroundCardId,
+      }));
     }
     closeCommanderPick();
     setCommanderSearch('');
@@ -617,6 +695,15 @@ export default function DecksPage() {
 
   const openMoveDialog = (items: CollectionItem[]) => {
     setMoveItems(items);
+    setMoveMode('move');
+    const inbox = locations.find(l => l.name === 'Inbox' || (l as any).builtIn);
+    setMoveDestLoc(locations.length > 0 ? String(inbox?.id ?? locations[0].id) : null);
+    openMove();
+  };
+
+  const openScheduleDialog = (items: CollectionItem[]) => {
+    setMoveItems(items);
+    setMoveMode('schedule');
     const inbox = locations.find(l => l.name === 'Inbox' || (l as any).builtIn);
     setMoveDestLoc(locations.length > 0 ? String(inbox?.id ?? locations[0].id) : null);
     openMove();
@@ -629,6 +716,42 @@ export default function DecksPage() {
       notifications.show({ title: 'Moved', message: `${moveItems.length} card(s) moved`, color: 'green' });
       closeMove();
       if (selectedDeck) loadDeckCards(selectedDeck.id);
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    }
+  };
+
+  const handleScheduleMove = async () => {
+    if (!moveDestLoc || moveItems.length === 0) return;
+    try {
+      for (const item of moveItems) {
+        await api.collection.update(item.id, { destinationId: Number(moveDestLoc) } as any);
+      }
+      notifications.show({ title: 'Scheduled', message: `${moveItems.length} card(s) scheduled for move`, color: 'green' });
+      closeMove();
+      if (selectedDeck) loadDeckCards(selectedDeck.id);
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    }
+  };
+
+  const openGhostMove = (req: RequiredCard) => {
+    setGhostMoveReq(req);
+    setGhostMoveDestType('location');
+    setGhostMoveDestId(null);
+  };
+
+  const handleConfirmGhostMove = async () => {
+    if (!selectedDeck || !ghostMoveReq || !ghostMoveDestId) return;
+    try {
+      await api.decks.moveRequired(selectedDeck.id, ghostMoveReq.id, {
+        destinationType: ghostMoveDestType,
+        destinationId: Number(ghostMoveDestId),
+      });
+      notifications.show({ title: 'Moved', message: 'Ghost destination updated', color: 'green' });
+      setGhostMoveReq(null);
+      loadDeckCards(selectedDeck.id);
+      loadDecks();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     }
@@ -729,7 +852,14 @@ export default function DecksPage() {
           </Group>
 
           <Paper withBorder p="sm" mb="md" radius="md">
-            <Text size="sm" fw={600} mb="xs">Add Cards to Deck</Text>
+            <Group mb="xs" justify="space-between" align="end" wrap="nowrap">
+              <Text size="sm" fw={600}>Add Cards to Deck</Text>
+              <Tooltip label="The deck's own location. Scheduled moves send cards here.">
+                <Badge size="sm" variant="light" color="teal" leftSection={<IconArchive size={12} />}>
+                  {locations.find(l => l.id === selectedDeck.locationId)?.name || 'No location'}
+                </Badge>
+              </Tooltip>
+            </Group>
             <TextInput placeholder="Search cards to add..." value={addCardSearch}
               onChange={e => setAddCardSearch(e.currentTarget.value)} leftSection={<IconSearch size={14} />}
               size="sm" />
@@ -773,6 +903,15 @@ export default function DecksPage() {
                             </Button>
                           </Group>
                         ))}
+                        {groupPrintings && addPrintingsTotal[group.name] != null && groupPrintings.length < addPrintingsTotal[group.name] && (
+                          <Group justify="center" py="xs">
+                            <Button size="compact-xs" variant="subtle" color="gray"
+                              loading={addLoadingPrintings.has(group.name)}
+                              onClick={() => loadMorePrintings(group.name)}>
+                              Show more ({addPrintingsTotal[group.name] - groupPrintings.length} more)
+                            </Button>
+                          </Group>
+                        )}
                         <Group p="xs" gap="sm" wrap="nowrap" style={{ opacity: 0.85 }}
                           onMouseEnter={e => (e.currentTarget.style.background = 'var(--mantine-color-default-hover)')}
                           onMouseLeave={e => (e.currentTarget.style.background = '')}
@@ -799,25 +938,39 @@ export default function DecksPage() {
             ) : (
               <ScrollArea h={320}>
                 {collectionPickItems.map(item => (
-                  <Group key={item.id} p="xs" gap="sm" wrap="nowrap">
-                    <Box w={24} h={34}><CardThumb card={item.card} /></Box>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <Group gap={4}>
-                        <SetSymbol code={item.card.setCode} name={item.card.setName} size={12} />
-                        <Text size="xs" c="dimmed">#{item.card.collectorNumber}</Text>
-                        {item.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge> : null}
-                      </Group>
-                      <Group gap={6} mt={2}>
-                        <Badge size="xs" variant="outline" color="gray">{item.condition || '-'}</Badge>
-                        <Badge size="xs" variant="light">{item.quantity}x</Badge>
-                        <Text size="xs" c="dimmed">@ {locations.find(l => l.id === item.locationId)?.name || `#${item.locationId}`}</Text>
-                      </Group>
-                    </div>
-                    <Button size="compact-xs" variant="light" color="green" leftSection={<IconPlus size={12} />}
-                      onClick={() => handleLinkFromCollection(item.id)}>
-                      Add to Deck
-                    </Button>
-                  </Group>
+                  <Paper key={item.id} withBorder mb={2} radius={0}
+                    style={item.destinationId ? { border: '2px solid var(--mantine-color-yellow-6)', background: 'var(--mantine-color-yellow-0)' } : undefined}>
+                    <Group p="xs" gap="sm" wrap="nowrap">
+                      <Box w={24} h={34}><CardThumb card={item.card} /></Box>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Group gap={4}>
+                          <SetSymbol code={item.card.setCode} name={item.card.setName} size={12} />
+                          <Text size="xs" c="dimmed">#{item.card.collectorNumber}</Text>
+                          {item.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge> : null}
+                        </Group>
+                        <Group gap={6} mt={2}>
+                          <Badge size="xs" variant="outline" color="gray">{item.condition || '-'}</Badge>
+                          <Badge size="xs" variant="light">{item.quantity}x</Badge>
+                          <Text size="xs" c="dimmed">@ {locations.find(l => l.id === item.locationId)?.name || `#${item.locationId}`}</Text>
+                        </Group>
+                        {item.destinationId && (
+                          <Group gap={6} mt={2}>
+                            <Badge size="xs" variant="light" color="yellow">
+                              {locations.find(l => l.id === item.locationId)?.name || `#${item.locationId}`} → {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}
+                            </Badge>
+                          </Group>
+                        )}
+                      </div>
+                      <Button size="compact-xs" variant="light" color="blue" leftSection={<IconBolt size={12} />}
+                        loading={pickAddingId === item.id} onClick={() => handleDeckPickAction(item, 'now', 'link')}>
+                        Move now
+                      </Button>
+                      <Button size="compact-xs" variant="light" color="teal" leftSection={<IconCalendarClock size={12} />}
+                        loading={pickAddingId === item.id} onClick={() => handleDeckPickAction(item, 'schedule', 'link')}>
+                        Schedule move
+                      </Button>
+                    </Group>
+                  </Paper>
                 ))}
               </ScrollArea>
             )}
@@ -956,16 +1109,10 @@ export default function DecksPage() {
 
               return Object.entries(grouped).map(([name, items]) => {
                 const rep = items[0];
-                const isCommander = rep.card.id === selectedDeck.commanderCardId;
-                const isZoneSecond = rep.card.id === selectedDeck.partnerCardId || rep.card.id === selectedDeck.backgroundCardId;
                 const illegal = !isCardLegal(rep.card);
                 const style: CSSProperties | undefined = illegal
                   ? { border: '2px solid var(--mantine-color-red-7)' }
-                  : isCommander
-                    ? { border: '2px solid var(--mantine-color-yellow-6)', boxShadow: '0 0 10px rgba(230,180,0,0.25)' }
-                    : isZoneSecond
-                      ? { border: '2px solid var(--mantine-color-teal-6)' }
-                      : undefined;
+                  : undefined;
                 const rows = items.flatMap(item => Array.from({ length: item.quantity }, (_, i) => ({ key: `${item.id}-${i}`, item })));
                 const gc = isGameChanger(name);
                 const nameNode = (
@@ -978,39 +1125,57 @@ export default function DecksPage() {
                     )}
                   </Group>
                 );
-                const renderRow = (row: { key: string; item: CollectionItem }, idx: number, withBadges: boolean) => (
-                  <Group key={row.key} p="sm" gap="sm" wrap="nowrap" bg={idx % 2 === 1 ? 'var(--mantine-color-default-hover)' : undefined}>
-                    <CardThumb card={row.item.card} foil={!!row.item.foil} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <Group gap={4} wrap="nowrap">
-                        <Text size="sm" fw={500}>{row.item.card.name}</Text>
-                        {withBadges && gc && (
-                          <Tooltip label="Game Changer">
-                            <IconFlame size={14} color="var(--mantine-color-orange-6)" style={{ flexShrink: 0 }} />
-                          </Tooltip>
-                        )}
-                      </Group>
-                      <Group gap={4}>
-                        <SetSymbol code={row.item.card.setCode} name={row.item.card.setName} size={12} />
-                        <Text size="xs" c="dimmed">#{row.item.card.collectorNumber}</Text>
-                      </Group>
-                    </div>
-                    {withBadges && isCommander && <Badge size="sm" color="yellow" variant="filled">Commander</Badge>}
-                    {withBadges && isZoneSecond && <Badge size="sm" color="teal" variant="filled">Partner/Background</Badge>}
-                    <Badge size="xs" variant="outline" color="gray">{row.item.condition || '-'}</Badge>
-                    {row.item.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge> : null}
-                    {row.item.purchasePrice ? <Text size="sm" c="dimmed">${row.item.purchasePrice.toFixed(2)}</Text> : null}
-                    <ActionIcon variant="subtle" size="sm" onClick={() => openEditCardDialog(row.item)}><IconPencil size={14} /></ActionIcon>
-                    <ActionIcon variant="subtle" size="sm" onClick={() => openMoveDialog([row.item])}><IconArrowRight size={14} /></ActionIcon>
-                    <ActionIcon variant="subtle" color="red" size="sm" onClick={() => handleRemoveCopy(row.item)}><IconTrash size={14} /></ActionIcon>
-                  </Group>
-                );
+                const renderRow = (row: { key: string; item: CollectionItem }, idx: number) => {
+                  const rowIsCommander = selectedDeck.commanderItemId != null
+                    ? row.item.id === selectedDeck.commanderItemId
+                    : row.item.card.id === selectedDeck.commanderCardId;
+                  const rowIsSecond = (selectedDeck.partnerItemId != null || selectedDeck.backgroundItemId != null)
+                    ? row.item.id === selectedDeck.partnerItemId || row.item.id === selectedDeck.backgroundItemId
+                    : row.item.card.id === selectedDeck.partnerCardId || row.item.card.id === selectedDeck.backgroundCardId;
+                  const rowBg = rowIsCommander
+                    ? 'var(--mantine-color-yellow-0)'
+                    : rowIsSecond
+                      ? 'var(--mantine-color-teal-0)'
+                      : idx % 2 === 1 ? 'var(--mantine-color-default-hover)' : undefined;
+                  const rowShadow = rowIsCommander
+                    ? 'inset 3px 0 0 0 var(--mantine-color-yellow-6)'
+                    : rowIsSecond
+                      ? 'inset 3px 0 0 0 var(--mantine-color-teal-6)'
+                      : undefined;
+                  return (
+                    <Group key={row.key} p="sm" gap="sm" wrap="nowrap" bg={rowBg} style={{ boxShadow: rowShadow }}>
+                      <CardThumb card={row.item.card} foil={!!row.item.foil} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Group gap={4} wrap="nowrap">
+                          <Text size="sm" fw={500}>{row.item.card.name}</Text>
+                          {gc && (
+                            <Tooltip label="Game Changer">
+                              <IconFlame size={14} color="var(--mantine-color-orange-6)" style={{ flexShrink: 0 }} />
+                            </Tooltip>
+                          )}
+                        </Group>
+                        <Group gap={4}>
+                          <SetSymbol code={row.item.card.setCode} name={row.item.card.setName} size={12} />
+                          <Text size="xs" c="dimmed">#{row.item.card.collectorNumber}</Text>
+                        </Group>
+                      </div>
+                      {rowIsCommander && <Badge size="sm" color="yellow" variant="filled">Commander</Badge>}
+                      {rowIsSecond && <Badge size="sm" color="teal" variant="filled">Partner/Background</Badge>}
+                      <Badge size="xs" variant="outline" color="gray">{row.item.condition || '-'}</Badge>
+                      {row.item.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge> : null}
+                      {row.item.purchasePrice ? <Text size="sm" c="dimmed">${row.item.purchasePrice.toFixed(2)}</Text> : null}
+                      <ActionIcon variant="subtle" size="sm" onClick={() => openEditCardDialog(row.item)}><IconPencil size={14} /></ActionIcon>
+                      <ActionIcon variant="subtle" size="sm" onClick={() => openMoveDialog([row.item])}><IconArrowRight size={14} /></ActionIcon>
+                      <ActionIcon variant="subtle" size="sm" onClick={() => openScheduleDialog([row.item])}><IconCalendarClock size={14} /></ActionIcon>
+                    </Group>
+                  );
+                };
 
                 if (rows.length === 1) {
                   return (
                     <CardGroup key={name} card={rep.card} name={nameNode} manaCost={rep.card.manaCost} typeLine={rep.card.typeLine}
                       isSingle expanded={false} onToggle={() => {}} style={style}>
-                      {renderRow(rows[0], 0, true)}
+                      {renderRow(rows[0], 0)}
                     </CardGroup>
                   );
                 }
@@ -1018,15 +1183,9 @@ export default function DecksPage() {
                 return (
                   <CardGroup key={name} card={rep.card} name={nameNode} manaCost={rep.card.manaCost} typeLine={rep.card.typeLine}
                     isSingle={false} expanded={deckGroupExpanded.has(name)} onToggle={() => toggleDeckGroup(name)} style={style}
-                    rightSection={
-                      <Group gap="sm" wrap="nowrap">
-                        {isCommander && <Badge size="sm" color="yellow" variant="filled">Commander</Badge>}
-                        {isZoneSecond && <Badge size="sm" color="teal" variant="filled">Partner/Background</Badge>}
-                        <Badge size="sm" variant="light">{rows.length} card{rows.length !== 1 ? 's' : ''}</Badge>
-                      </Group>
-                    }>
+                    rightSection={<Badge size="sm" variant="light">{rows.length} card{rows.length !== 1 ? 's' : ''}</Badge>}>
                     <Box>
-                      {rows.map((row, idx) => renderRow(row, idx, false))}
+                      {rows.map((row, idx) => renderRow(row, idx))}
                     </Box>
                   </CardGroup>
                 );
@@ -1073,6 +1232,7 @@ export default function DecksPage() {
                       <Button size="compact-xs" variant="light" color="blue" onClick={() => openFillDialog(req)}>
                         Fill from Collection
                       </Button>
+                      <ActionIcon variant="subtle" size="sm" onClick={() => openGhostMove(req)}><IconArrowRight size={14} /></ActionIcon>
                       <ActionIcon variant="subtle" color="red" size="sm" onClick={() => handleRemoveRequired(req.id)}><IconTrash size={14} /></ActionIcon>
                     </Group>
                   </Paper>
@@ -1125,9 +1285,6 @@ export default function DecksPage() {
         <TextInput label="Name" value={form.name} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, name: v })); }} mb="sm" required />
         <Textarea label="Description" value={form.description} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, description: v })); }} mb="sm" />
         <Select label="Deck Type" data={DECK_TYPES} value={form.deckType} onChange={v => setForm(f => ({ ...f, deckType: v || 'custom' }))} mb="sm" />
-        {form.deckType === 'commander' && (
-          <CommanderArea form={form} setForm={setForm} openPicker={openCommanderPickFor} />
-        )}
         <Group justify="flex-end"><Button variant="default" onClick={closeCreate}>Cancel</Button><Button onClick={handleCreate}>Create</Button></Group>
       </Modal>
 
@@ -1203,10 +1360,36 @@ export default function DecksPage() {
         )}
       </Modal>
 
-      <Modal opened={moveOpened} onClose={closeMove} title={`Move ${moveItems.length} item(s)`} size="sm" centered>
+      <Modal opened={moveOpened} onClose={closeMove}
+        title={moveMode === 'schedule' ? `Schedule Move — ${moveItems.length} item(s)` : `Move — ${moveItems.length} item(s)`} size="sm" centered>
         <Select placeholder="Destination location" data={locations.map(l => ({ value: String(l.id), label: l.name }))}
           value={moveDestLoc} onChange={setMoveDestLoc} mb="md" />
-        <Group justify="flex-end"><Button variant="default" onClick={closeMove}>Cancel</Button><Button onClick={handleMove}>Move</Button></Group>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={closeMove}>Cancel</Button>
+          {moveMode === 'schedule' ? (
+            <Button color="teal" leftSection={<IconCalendarClock size={14} />} onClick={handleScheduleMove}>Schedule</Button>
+          ) : (
+            <Button leftSection={<IconBolt size={14} />} onClick={handleMove}>Move Now</Button>
+          )}
+        </Group>
+      </Modal>
+
+      <Modal opened={ghostMoveReq !== null} onClose={() => setGhostMoveReq(null)} title={`Move Ghost — ${ghostMoveReq?.cardName || ''}`} size="sm" centered>
+        <Text size="xs" c="dimmed" mb="sm">Choose where this card should go when filled.</Text>
+        <SegmentedControl fullWidth mb="sm" value={ghostMoveDestType}
+          onChange={v => { setGhostMoveDestType(v as 'location' | 'deck'); setGhostMoveDestId(null); }}
+          data={[{ value: 'location', label: 'Location' }, { value: 'deck', label: 'Deck' }]} />
+        {ghostMoveDestType === 'location' ? (
+          <Select placeholder="Destination location" data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+            value={ghostMoveDestId} onChange={setGhostMoveDestId} mb="md" searchable />
+        ) : (
+          <Select placeholder="Destination deck" data={decks.filter(d => d.id !== selectedDeck?.id).map(d => ({ value: String(d.id), label: d.name }))}
+            value={ghostMoveDestId} onChange={setGhostMoveDestId} mb="md" searchable />
+        )}
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setGhostMoveReq(null)}>Cancel</Button>
+          <Button disabled={!ghostMoveDestId} onClick={handleConfirmGhostMove}>Move Ghost</Button>
+        </Group>
       </Modal>
 
       <Modal opened={fillOpened} onClose={closeFill} title={`Fill "${fillCardName}" from Collection`} size="md" centered>
@@ -1215,7 +1398,8 @@ export default function DecksPage() {
         ) : (
           <ScrollArea h={300}>
             {fillCollectionItems.map(item => (
-              <Paper key={item.id} withBorder mb={2} radius={0}>
+              <Paper key={item.id} withBorder mb={2} radius={0}
+                style={item.destinationId ? { border: '2px solid var(--mantine-color-yellow-6)', background: 'var(--mantine-color-yellow-0)' } : undefined}>
                 <Group p="sm" gap="sm" wrap="nowrap">
                   <CardThumb card={item.card} />
                   <div style={{ flex: 1 }}>
@@ -1224,12 +1408,24 @@ export default function DecksPage() {
                       <SetSymbol code={item.card.setCode} name={item.card.setName} size={12} />
                       <Text size="xs" c="dimmed">#{item.card.collectorNumber}</Text>
                     </Group>
+                    {item.destinationId && (
+                      <Group gap={6} mt={2}>
+                        <Badge size="xs" variant="light" color="yellow">
+                          {locations.find(l => l.id === item.locationId)?.name || `#${item.locationId}`} → {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}
+                        </Badge>
+                      </Group>
+                    )}
                   </div>
                   <Badge size="sm" variant="light">{item.quantity}x</Badge>
                   <Badge size="xs" variant="outline" color="gray">{item.condition || '-'}</Badge>
                   {item.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge> : null}
-                  <Button size="compact-xs" variant="light" color="blue" onClick={() => handleFillCard(item.id)}>
-                    Use This
+                  <Button size="compact-xs" variant="light" color="blue" leftSection={<IconBolt size={12} />}
+                    loading={pickAddingId === item.id} onClick={() => handleDeckPickAction(item, 'now', 'fill')}>
+                    Move now
+                  </Button>
+                  <Button size="compact-xs" variant="light" color="teal" leftSection={<IconCalendarClock size={12} />}
+                    loading={pickAddingId === item.id} onClick={() => handleDeckPickAction(item, 'schedule', 'fill')}>
+                    Schedule move
                   </Button>
                 </Group>
               </Paper>
@@ -1238,6 +1434,22 @@ export default function DecksPage() {
         )}
         <Group justify="flex-end" mt="md">
           <Button variant="default" onClick={closeFill}>Cancel</Button>
+        </Group>
+      </Modal>
+
+      <Modal opened={schedConfirm !== null} onClose={() => setSchedConfirm(null)} title="Cancel Scheduled Move" size="sm" centered>
+        <Text mb="md">
+          {schedConfirm?.item.card.name} currently has a scheduled move from{' '}
+          <b>{locations.find(l => l.id === schedConfirm?.item.locationId)?.name || `#${schedConfirm?.item.locationId}`}</b> to{' '}
+          <b>{locations.find(l => l.id === schedConfirm?.item.destinationId)?.name || `#${schedConfirm?.item.destinationId}`}</b>.
+        </Text>
+        <Text mb="md">
+          Are you sure you want to cancel the current scheduled move and {schedConfirm?.mode === 'now' ? 'move' : 'schedule'}{' '}
+          {schedConfirm?.item.card.name} to {selectedDeck?.name}?
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setSchedConfirm(null)}>Keep Schedule</Button>
+          <Button color="orange" onClick={confirmSchedAction}>Cancel Schedule & Continue</Button>
         </Group>
       </Modal>
 
@@ -1314,7 +1526,7 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
   deck: Deck;
   deckCards: CollectionItem[];
   requiredCards: RequiredCard[];
-  onAssign: (cardId: string, mode: 'commander' | 'partner' | 'background') => Promise<void>;
+  onAssign: (cardId: string, itemId: number | null, mode: 'commander' | 'partner' | 'background') => Promise<void>;
 }) {
   const [commander, setCommander] = useState<ScryfallCard | null>(null);
   const [partner, setPartner] = useState<ScryfallCard | null>(null);
@@ -1322,6 +1534,8 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
   const [pickMode, setPickMode] = useState<'commander' | 'second'>('commander');
   const [pickOpened, { open: openPick, close: closePick }] = useDisclosure(false);
   const [assigning, setAssigning] = useState(false);
+  const [pickerExpanded, setPickerExpanded] = useState<Set<string>>(new Set());
+  const [blockedConfirm, setBlockedConfirm] = useState<{ entry: PickEntry; fromRole: string; toRole: string; mode: 'commander' | 'partner' | 'background' } | null>(null);
 
   useEffect(() => {
     if (deck.commanderCardId) api.cards.get(deck.commanderCardId).then(setCommander).catch(() => setCommander(null));
@@ -1336,36 +1550,83 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
     else setBackground(null);
   }, [deck.backgroundCardId]);
 
-  const uniqueCards = deckCards.filter((item, i, arr) => arr.findIndex(x => x.card.id === item.card.id) === i);
-
-  const pickEntries: Array<{ key: string; name: string; typeLine: string | null; cardId: string | null; reqId?: number; thumb: ReactNode }> = [];
-  for (const item of uniqueCards) {
+  const pickEntries: PickEntry[] = [];
+  for (const item of deckCards) {
     pickEntries.push({
-      key: item.card.id,
+      key: `item:${item.id}`,
       name: item.card.name,
       typeLine: item.card.typeLine,
+      copyInfo: `${item.card.setCode.toUpperCase()} #${item.card.collectorNumber}${item.foil ? ' · Foil' : ''}${item.condition ? ` · ${item.condition}` : ''}`,
       cardId: item.card.id,
-      thumb: <CardThumb card={item.card} />,
+      itemId: item.id,
+      card: item.card,
+      thumb: <CardThumb card={item.card} foil={!!item.foil} />,
     });
   }
   for (const req of requiredCards) {
-    const key = req.cardId || `name:${req.cardName}`;
-    if (pickEntries.some(e => e.key === key)) continue;
+    if (pickEntries.some(e => e.reqId === req.id)) continue;
     pickEntries.push({
-      key,
+      key: req.cardId ? `card:${req.cardId}` : `name:${req.cardName}`,
       name: req.cardName,
       typeLine: 'Ghost card',
       cardId: req.cardId || null,
+      itemId: null,
       reqId: req.id,
+      card: null,
       thumb: <GhostThumb name={req.cardName} cardId={req.cardId} />,
     });
   }
 
   const secondCard = partner || background;
   const secondLabel = partner ? 'Partner' : background ? 'Background' : null;
+  const secondAssignMode: 'partner' | 'background' = deck.backgroundCardId ? 'background' : 'partner';
 
-  const handleAssign = async (entry: { cardId: string | null; name: string; reqId?: number }, explicitMode?: 'commander' | 'partner' | 'background') => {
-    const mode = explicitMode || (deck.backgroundCardId ? 'background' : 'partner');
+  const isCurrentEntry = (entry: PickEntry): boolean => {
+    if (pickMode === 'commander') {
+      if (deck.commanderItemId != null) return deck.commanderItemId === entry.itemId;
+      return !!entry.cardId && entry.cardId === deck.commanderCardId;
+    }
+    if (deck.partnerItemId != null || deck.backgroundItemId != null) {
+      return entry.itemId === deck.partnerItemId || entry.itemId === deck.backgroundItemId;
+    }
+    return !!entry.cardId && (entry.cardId === deck.partnerCardId || entry.cardId === deck.backgroundCardId);
+  };
+
+  const isBlockedEntry = (entry: PickEntry): boolean => {
+    if (pickMode === 'commander') {
+      if (deck.partnerItemId != null || deck.backgroundItemId != null) {
+        return entry.itemId === deck.partnerItemId || entry.itemId === deck.backgroundItemId;
+      }
+      const otherCardId = deck.partnerCardId || deck.backgroundCardId;
+      return !!entry.cardId && !!otherCardId && entry.cardId === otherCardId;
+    }
+    if (deck.commanderItemId != null) {
+      return entry.itemId === deck.commanderItemId;
+    }
+    const otherCardId = deck.commanderCardId;
+    return !!entry.cardId && !!otherCardId && entry.cardId === otherCardId;
+  };
+
+  const requestBlockedReassign = (entry: PickEntry) => {
+    if (pickMode === 'commander') {
+      setBlockedConfirm({
+        entry,
+        fromRole: deck.partnerCardId ? 'Partner' : 'Background',
+        toRole: 'Commander',
+        mode: 'commander',
+      });
+    } else {
+      setBlockedConfirm({
+        entry,
+        fromRole: 'Commander',
+        toRole: deck.backgroundCardId ? 'Background' : 'Partner',
+        mode: secondAssignMode,
+      });
+    }
+  };
+
+  const handleAssign = async (entry: PickEntry, explicitMode?: 'commander' | 'partner' | 'background') => {
+    const mode = explicitMode || secondAssignMode;
     setAssigning(true);
     try {
       let cardId = entry.cardId;
@@ -1380,11 +1641,18 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
       if (entry.reqId && !entry.cardId) {
         await api.decks.updateRequired(deck.id, entry.reqId, { cardId }).catch(() => {});
       }
-      await onAssign(cardId, mode);
+      await onAssign(cardId, entry.itemId, mode);
       closePick();
     } catch {} finally {
       setAssigning(false);
     }
+  };
+
+  const confirmBlocked = () => {
+    if (!blockedConfirm) return;
+    const { entry, mode } = blockedConfirm;
+    setBlockedConfirm(null);
+    handleAssign(entry, mode);
   };
 
   const commanderSlot = (
@@ -1421,27 +1689,86 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
       <Modal opened={pickOpened} onClose={closePick}
         title={pickMode === 'commander' ? 'Set Commander from Deck' : 'Set Partner/Background from Deck'}
         size="md" centered>
-        <ScrollArea h={420}>
+        <ScrollArea h={440}>
           {pickEntries.length === 0 && <Text c="dimmed" ta="center" py="xl">Add cards or ghost cards to the deck first.</Text>}
-          {pickEntries.map(entry => (
-            <Group key={entry.key} p="xs" gap="sm" wrap="nowrap">
-              <Box w={32} h={45} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>{entry.thumb}</Box>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Text size="sm" fw={500}>{entry.name}</Text>
-                <Text size="xs" c="dimmed">{entry.typeLine}</Text>
-              </div>
-              {pickMode === 'commander' ? (
-                <Button size="compact-xs" variant="light" color="yellow" loading={assigning} onClick={() => handleAssign(entry, 'commander')}>
-                  Set as Commander
-                </Button>
-              ) : (
-                <Button size="compact-xs" variant="light" color="teal" loading={assigning} onClick={() => handleAssign(entry)}>
-                  Set as Partner/Background
-                </Button>
-              )}
-            </Group>
-          ))}
+          {(() => {
+            const grouped: Record<string, PickEntry[]> = {};
+            for (const e of pickEntries) {
+              if (!grouped[e.name]) grouped[e.name] = [];
+              grouped[e.name].push(e);
+            }
+            return Object.entries(grouped).map(([name, entries]) => {
+              const rep = entries[0];
+              const isGhost = rep.reqId != null;
+              const expanded = pickerExpanded.has(name) || entries.some(isCurrentEntry);
+              const toggleGroup = () => setPickerExpanded(prev => {
+                const n = new Set(prev);
+                if (n.has(name)) n.delete(name); else n.add(name);
+                return n;
+              });
+              const groupCard = isGhost
+                ? { imageUris: null as Record<string, string> | null }
+                : { imageUris: rep.card?.imageUris ?? null, cardFaces: rep.card?.cardFaces ?? null };
+              return (
+                <CardGroup key={name} card={groupCard} thumb={rep.thumb} name={name}
+                  manaCost={isGhost ? null : (rep.card?.manaCost ?? null)} typeLine={rep.typeLine}
+                  isSingle={entries.length === 1} expanded={expanded} onToggle={toggleGroup}
+                  rightSection={entries.length > 1 ? <Badge size="sm" variant="light">{entries.length}</Badge> : undefined}>
+                  {entries.map(entry => {
+                    const current = isCurrentEntry(entry);
+                    const blocked = isBlockedEntry(entry);
+                    return (
+                      <Group key={entry.key} p="xs" gap="sm" wrap="nowrap"
+                        bg={current ? 'var(--mantine-color-yellow-0)' : undefined}
+                        style={{
+                          ...(current ? { boxShadow: 'inset 3px 0 0 0 var(--mantine-color-yellow-6)' } : {}),
+                          ...(blocked ? { opacity: 0.45, cursor: 'pointer' } : {}),
+                        }}
+                        onClick={blocked ? () => requestBlockedReassign(entry) : undefined}
+                      >
+                        <Box w={32} h={45} style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>{entry.thumb}</Box>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <Group gap={6} wrap="nowrap">
+                            <Text size="sm" fw={500}>{entry.name}</Text>
+                            {current && <Badge size="xs" color="yellow" variant="filled">Current</Badge>}
+                            {blocked && <Badge size="xs" color="red" variant="light">Currently {pickMode === 'commander' ? (deck.partnerCardId ? 'Partner' : 'Background') : 'Commander'}</Badge>}
+                          </Group>
+                          <Text size="xs" c="dimmed">{entry.typeLine}</Text>
+                          {entry.copyInfo && <Text size="xs" c="dimmed">{entry.copyInfo}</Text>}
+                        </div>
+                        {blocked ? (
+                          <Button size="compact-xs" variant="subtle" color="orange"
+                            onClick={e => { e.stopPropagation(); requestBlockedReassign(entry); }}>
+                            Reassign
+                          </Button>
+                        ) : pickMode === 'commander' ? (
+                          <Button size="compact-xs" variant="light" color="yellow" loading={assigning} onClick={() => handleAssign(entry, 'commander')}>
+                            Set as Commander
+                          </Button>
+                        ) : (
+                          <Button size="compact-xs" variant="light" color="teal" loading={assigning} onClick={() => handleAssign(entry)}>
+                            Set as Partner/Background
+                          </Button>
+                        )}
+                      </Group>
+                    );
+                  })}
+                </CardGroup>
+              );
+            });
+          })()}
         </ScrollArea>
+      </Modal>
+
+      <Modal opened={blockedConfirm !== null} onClose={() => setBlockedConfirm(null)}
+        title="Change role" size="sm" centered>
+        <Text mb="md">
+          <b>{blockedConfirm?.entry.name}</b> is currently set as the {blockedConfirm?.fromRole}. Do you wish to set it as the {blockedConfirm?.toRole} instead? This will remove it from the {blockedConfirm?.fromRole} slot.
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setBlockedConfirm(null)}>Keep Current</Button>
+          <Button color="orange" onClick={confirmBlocked}>Set as {blockedConfirm?.toRole}</Button>
+        </Group>
       </Modal>
     </>
   );

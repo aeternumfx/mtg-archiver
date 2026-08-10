@@ -177,6 +177,7 @@ export function initDb() {
   if (!locCols.includes('group_id')) sqlite.exec('ALTER TABLE locations ADD COLUMN group_id INTEGER REFERENCES location_groups(id)');
   if (!locCols.includes('type')) sqlite.exec("ALTER TABLE locations ADD COLUMN type TEXT NOT NULL DEFAULT 'binder'");
   if (!locCols.includes('built_in')) sqlite.exec("ALTER TABLE locations ADD COLUMN built_in INTEGER NOT NULL DEFAULT 0");
+  if (!locCols.includes('deck_id')) sqlite.exec('ALTER TABLE locations ADD COLUMN deck_id INTEGER REFERENCES decks(id)');
 
   const inboxExists = sqlite.prepare("SELECT id FROM locations WHERE name = 'Inbox'").get();
   if (!inboxExists) {
@@ -196,6 +197,23 @@ export function initDb() {
   if (!deckCols.includes('commander_card_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN commander_card_id TEXT REFERENCES scryfall_cards(id)');
   if (!deckCols.includes('partner_card_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN partner_card_id TEXT REFERENCES scryfall_cards(id)');
   if (!deckCols.includes('background_card_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN background_card_id TEXT REFERENCES scryfall_cards(id)');
+  if (!deckCols.includes('commander_item_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN commander_item_id INTEGER REFERENCES collection_items(id)');
+  if (!deckCols.includes('partner_item_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN partner_item_id INTEGER REFERENCES collection_items(id)');
+  if (!deckCols.includes('background_item_id')) sqlite.exec('ALTER TABLE decks ADD COLUMN background_item_id INTEGER REFERENCES collection_items(id)');
+
+  const decksMissingLoc = sqlite.prepare(`
+    SELECT d.id, d.name, d.description, d.group_id as groupId
+    FROM decks d
+    WHERE NOT EXISTS (SELECT 1 FROM locations l WHERE l.deck_id = d.id)
+  `).all() as Array<{ id: number; name: string; description: string | null; groupId: number | null }>;
+  for (const d of decksMissingLoc) {
+    try {
+      sqlite.prepare(`
+        INSERT INTO locations (name, description, type, group_id, deck_id)
+        VALUES (?, ?, 'deck', ?, ?)
+      `).run(d.name, d.description ? `Deck location for ${d.name}` : null, d.groupId, d.id);
+    } catch { /* name collision; deck location can be created lazily */ }
+  }
 
   const wlCols = (sqlite.pragma('table_info(wantlist_items)') as Array<{ name: string }>).map(c => c.name);
   if (!wlCols.includes('foil')) sqlite.exec("ALTER TABLE wantlist_items ADD COLUMN foil INTEGER NOT NULL DEFAULT 0");
@@ -203,6 +221,7 @@ export function initDb() {
   if (!wlCols.includes('destination_id')) sqlite.exec("ALTER TABLE wantlist_items ADD COLUMN destination_id INTEGER");
   if (!wlCols.includes('collection_goal_id')) sqlite.exec("ALTER TABLE wantlist_items ADD COLUMN collection_goal_id INTEGER");
   if (!wlCols.includes('persistent')) sqlite.exec("ALTER TABLE wantlist_items ADD COLUMN persistent INTEGER NOT NULL DEFAULT 0");
+  if (!wlCols.includes('deck_required_id')) sqlite.exec("ALTER TABLE wantlist_items ADD COLUMN deck_required_id INTEGER");
 
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS collection_goals (

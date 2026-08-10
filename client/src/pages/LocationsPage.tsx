@@ -23,12 +23,14 @@ const ITEM_ICONS: Record<string, any> = {
   binder: IconBook,
   other: IconArchive,
   collection: IconTarget,
+  deck: IconStack,
 };
 
 const ITEM_LABELS: Record<string, string> = {
   binder: 'Binder',
   other: 'Other',
   collection: 'Collection',
+  deck: 'Deck',
 };
 
 export default function LocationsPage() {
@@ -82,11 +84,12 @@ export default function LocationsPage() {
 
   useEffect(() => { loadData(); }, []);
 
+  const regularLocs = locations.filter(l => !l.deckId);
   const locationsByGroup = (groupId: number | null) =>
-    locations.filter(l => (l.groupId ?? null) === groupId);
+    regularLocs.filter(l => (l.groupId ?? null) === groupId);
 
   const inboxLoc = locations.find(l => l.builtIn);
-  const ungroupedLocs = locations.filter(l => !l.groupId && !l.builtIn);
+  const ungroupedLocs = regularLocs.filter(l => !l.groupId && !l.builtIn);
   const ungroupedDecks = decks.filter(d => !d.groupId);
 
   useEffect(() => {
@@ -253,7 +256,7 @@ export default function LocationsPage() {
           </div>
         </Group>
         <Group gap={4}>
-          <Button variant="light" size="compact-sm" onClick={() => navigate(`/collection?deck_id=${deck.id}`)}>View</Button>
+          <Button variant="light" size="compact-sm" onClick={() => navigate(`/decks?deck=${deck.id}`)}>View</Button>
           <ActionIcon variant="subtle" size="sm" onClick={() => openEditDeck(deck)}><IconEdit size={16} /></ActionIcon>
           <ActionIcon variant="subtle" color="red" size="sm" onClick={() => { setDeleteId(deck.id); setDeleteType('deck'); }}><IconTrash size={16} /></ActionIcon>
         </Group>
@@ -271,7 +274,10 @@ export default function LocationsPage() {
           <Group gap="sm">
             <Icon size={18} />
             <div>
-              <Text size="sm" fw={500}>{loc.name}{isInbox ? <Badge size="xs" ml="xs" color="blue" variant="light">Default</Badge> : ''}</Text>
+              <Text size="sm" fw={500}>
+                {loc.name}
+                {isInbox ? <Badge size="xs" ml="xs" color="blue" variant="light">Default</Badge> : ''}
+              </Text>
               {loc.description && <Text size="xs" c="dimmed">{loc.description}</Text>}
               <Text size="xs" c="dimmed">{loc.cardCount ?? 0} cards</Text>
               {goal && (
@@ -373,7 +379,7 @@ export default function LocationsPage() {
           </Box>
         )}
 
-        {!loading && locations.length === 0 && decks.length === 0 && (
+        {!loading && regularLocs.length === 0 && decks.length === 0 && (
           <Text c="dimmed" ta="center" py="xl">No locations or decks yet.</Text>
         )}
       </Stack>

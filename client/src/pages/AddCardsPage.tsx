@@ -45,6 +45,20 @@ const defaultForm = (): PrintingForm => ({
   purchasePrice: '', packOpened: false, notes: '',
 });
 
+function InvalidBubble() {
+  return (
+    <Box style={{
+      position: 'absolute', top: '100%', left: 4, marginTop: 2, zIndex: 40,
+      background: '#e03131', color: '#fff', fontSize: 12, fontWeight: 600,
+      padding: '4px 10px', borderRadius: 6, whiteSpace: 'nowrap',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.35)', pointerEvents: 'none',
+    }}>
+      Invalid
+      <Box style={{ position: 'absolute', top: -6, left: 18, width: 0, height: 0, borderLeft: '6px solid transparent', borderRight: '6px solid transparent', borderBottom: '6px solid #e03131' }} />
+    </Box>
+  );
+}
+
 export default function AddCardsPage() {
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -63,11 +77,20 @@ export default function AddCardsPage() {
   const [printingPage, setPrintingPage] = useState<Record<string, number>>({});
   const [quickAddCard, setQuickAddCard] = useState<ScryfallCard | null>(null);
   const [quickForm, setQuickForm] = useState<PrintingForm>(defaultForm());
+  const [quickLoc, setQuickLoc] = useState<string | null>(null);
+  const [quickDest, setQuickDest] = useState<string | null>(null);
+  const [invalidField, setInvalidField] = useState<'location' | 'price' | null>(null);
   const [wantlist, setWantlist] = useState<Array<{ id: number; cardId: string | null; cardName: string; destinationId: number | null; collectionGoalId: number | null; persistent: number }>>([]);
   const [wantConfirm, setWantConfirm] = useState<{ toAdd: Array<[string, PrintingForm]>; entries: WantEntry[]; quick?: boolean } | null>(null);
   const [wantLoc, setWantLoc] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const quickModalRef = useRef<HTMLDivElement>(null);
+  const locInputRef = useRef<HTMLInputElement>(null);
+  const destInputRef = useRef<HTMLInputElement>(null);
+  const notesInputRef = useRef<HTMLInputElement>(null);
+  const priceInputRef = useRef<HTMLInputElement>(null);
+  const qtyInputRef = useRef<HTMLInputElement>(null);
   const locationsLoaded = useRef(false);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
@@ -183,11 +206,35 @@ export default function AddCardsPage() {
     debounceRef.current = setTimeout(() => doSearch(value), 300);
   }, [doSearch]);
 
+  const formatPrice = () => {
+    setQuickForm(f => {
+      const v = f.purchasePrice.trim();
+      if (!v) return f;
+      const n = parseFloat(v);
+      if (isNaN(n)) return f;
+      return { ...f, purchasePrice: n.toFixed(2) };
+    });
+  };
+
+  const validateQuick = (): 'location' | 'price' | null => {
+    if (!(quickLoc ?? selectedLoc)) return 'location';
+    const p = quickForm.purchasePrice.trim();
+    if (p && isNaN(parseFloat(p))) return 'price';
+    return null;
+  };
+
   const handleQuickAdd = async () => {
-    if (!quickAddCard || !selectedLoc) return;
+    const bad = validateQuick();
+    if (bad) {
+      setInvalidField(bad);
+      return;
+    }
+    setInvalidField(null);
+    const loc = quickLoc ?? selectedLoc;
+    if (!quickAddCard || !loc) return;
     const entries = findWantEntries([{ id: quickAddCard.id, name: quickAddCard.name }]);
     if (entries.length > 0) {
-      setWantLoc(selectedLoc);
+      setWantLoc(loc);
       setWantConfirm({ toAdd: [[quickAddCard.id, quickForm]], entries, quick: true });
       return;
     }
@@ -195,7 +242,19 @@ export default function AddCardsPage() {
   };
 
   const doQuickAdd = async (destOverride?: number | null, locOverride?: string | null) => {
-    if (!quickAddCard || !selectedLoc) return;
+    const loc = locOverride ?? quickLoc ?? selectedLoc;
+    if (!quickAddCard || !loc) return;
+    const prev = {
+      card: quickAddCard,
+      form: quickForm,
+      loc: quickLoc,
+      dest: quickDest,
+      query,
+      groupedResults,
+      printings,
+      forms,
+      expanded,
+    };
     setAdding(true);
     try {
       const customPrice = quickForm.purchasePrice.trim();
@@ -203,14 +262,25 @@ export default function AddCardsPage() {
       const purchasePrice = customPrice ? parseFloat(customPrice) : (defaultP ? parseFloat(defaultP) : undefined);
       const priceAutofilled = (!customPrice && !defaultP) ? 1 : 0;
       const { item, created } = await api.collection.addDetailed({
-        cardId: quickAddCard.id, locationId: Number(locOverride ?? selectedLoc), quantity: quickForm.quantity || 1,
+        cardId: quickAddCard.id, locationId: Number(loc), quantity: quickForm.quantity || 1,
         foil: quickForm.foil, condition: quickForm.condition || null,
         purchasePrice: purchasePrice ?? (priceAutofilled ? undefined : null),
         packOpened: quickForm.packOpened, notes: quickForm.notes || undefined,
-        destinationId: destOverride ?? (destLoc ? Number(destLoc) : undefined),
+        destinationId: destOverride ?? (quickDest ? Number(quickDest) : undefined),
       });
-      const locName = locations.find(l => l.id === Number(locOverride ?? selectedLoc))?.name || 'collection';
-      pushUndo(`${quickAddCard.name} added to ${locName}`, () => undoAdds([{ item, created, qty: quickForm.quantity || 1 }]), 'Undo add');
+      const locName = locations.find(l => l.id === Number(loc))?.name || 'collection';
+      pushUndo(`${quickAddCard.name} added to ${locName}`, async () => {
+        await undoAdds([{ item, created, qty: quickForm.quantity || 1 }]);
+        setQuickAddCard(prev.card);
+        setQuickForm(prev.form);
+        setQuickLoc(prev.loc);
+        setQuickDest(prev.dest);
+        setGroupedResults(prev.groupedResults);
+        setPrintings(prev.printings);
+        setForms(prev.forms);
+        setExpanded(prev.expanded);
+        setQuery(prev.query);
+      }, 'Undo add');
       setQuickAddCard(null);
       setGroupedResults([]); setPrintings({}); setForms({}); setExpanded(new Set());
       setQuery('');
@@ -225,22 +295,126 @@ export default function AddCardsPage() {
 
   const modalKeyRef = useRef(handleQuickAdd);
   modalKeyRef.current = handleQuickAdd;
+  const wantConfirmRef = useRef(wantConfirm);
+  wantConfirmRef.current = wantConfirm;
+  const prevFieldRef = useRef<{
+    price: string; qty: number; notes: string; loc: string | null; dest: string | null;
+  }>({ price: '', qty: 1, notes: '', loc: null, dest: null });
+  const latestRef = useRef({ quickLoc, quickDest, form: quickForm });
+  latestRef.current = { quickLoc, quickDest, form: quickForm };
+
+  const getEditingField = (): 'location' | 'destination' | 'notes' | 'price' | 'editing' | null => {
+    const el = document.activeElement as HTMLElement | null;
+    if (!el || !quickModalRef.current?.contains(el)) return null;
+    if (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' && !el.isContentEditable) return null;
+    if (el === locInputRef.current) return 'location';
+    if (el === destInputRef.current) return 'destination';
+    if (el === notesInputRef.current) return 'notes';
+    if (el === priceInputRef.current) return 'price';
+    return 'editing';
+  };
 
   useEffect(() => {
     if (!quickAddCard) return;
     const handler = (e: KeyboardEvent) => {
+      const editing = getEditingField();
+
       if (e.key === 'Enter') {
+        if (editing === 'notes' || editing === 'editing') {
+          e.preventDefault();
+          e.stopPropagation();
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
+        if (editing === 'price') {
+          e.preventDefault();
+          e.stopPropagation();
+          const v = quickForm.purchasePrice.trim();
+          if (v && isNaN(parseFloat(v))) {
+            setInvalidField('price');
+            return;
+          }
+          setInvalidField(prev => prev === 'price' ? null : prev);
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
+        if (editing === 'location' || editing === 'destination') {
+          const input = editing === 'location' ? locInputRef.current : destInputRef.current;
+          if (input?.hasAttribute('data-expanded')) {
+            setTimeout(() => input.blur(), 0);
+            return;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         modalKeyRef.current();
         return;
       }
+
+      if (e.key === 'Escape') {
+        if (editing) {
+          e.preventDefault();
+          e.stopPropagation();
+          const prev = prevFieldRef.current;
+          if (editing === 'location') setQuickLoc(prev.loc);
+          else if (editing === 'destination') setQuickDest(prev.dest);
+          else if (editing === 'price') setQuickForm(f => ({ ...f, purchasePrice: prev.price }));
+          else if (editing === 'notes') setQuickForm(f => ({ ...f, notes: prev.notes }));
+          else setQuickForm(f => ({ ...f, quantity: prev.qty }));
+          setInvalidField(null);
+          (document.activeElement as HTMLElement | null)?.blur();
+          return;
+        }
+        if (wantConfirmRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setQuickAddCard(null);
+        return;
+      }
+
+      if (editing) return;
+
       if (e.key === 'f' || e.key === 'F') {
         const fs = foilState(quickAddCard);
         if (fs.canFoil && !fs.foilOnly) {
           e.preventDefault();
           setQuickForm(f => ({ ...f, foil: !f.foil }));
         }
+        return;
+      }
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        setInvalidField(prev => prev === 'location' ? null : prev);
+        locInputRef.current?.focus();
+        locInputRef.current?.select();
+        return;
+      }
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        destInputRef.current?.focus();
+        destInputRef.current?.select();
+        return;
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setInvalidField(prev => prev === 'price' ? null : prev);
+        priceInputRef.current?.focus();
+        priceInputRef.current?.select();
+        return;
+      }
+      if (e.key === 'q' || e.key === 'Q') {
+        e.preventDefault();
+        qtyInputRef.current?.focus();
+        qtyInputRef.current?.select();
+        return;
+      }
+      if (e.key === 'n' || e.key === 'N') {
+        e.preventDefault();
+        notesInputRef.current?.focus();
         return;
       }
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
@@ -268,6 +442,22 @@ export default function AddCardsPage() {
     return () => window.removeEventListener('keydown', handler, true);
   }, [quickAddCard]);
 
+  useEffect(() => {
+    if (!quickAddCard) return;
+    const onFocusIn = (e: FocusEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t === locInputRef.current) prevFieldRef.current.loc = latestRef.current.quickLoc;
+      else if (t === destInputRef.current) prevFieldRef.current.dest = latestRef.current.quickDest;
+      else if (t === priceInputRef.current) prevFieldRef.current.price = latestRef.current.form.purchasePrice;
+      else if (t === notesInputRef.current) prevFieldRef.current.notes = latestRef.current.form.notes;
+      else if (t === qtyInputRef.current) prevFieldRef.current.qty = latestRef.current.form.quantity;
+    };
+    const el = quickModalRef.current;
+    if (!el) return;
+    el.addEventListener('focusin', onFocusIn);
+    return () => el.removeEventListener('focusin', onFocusIn);
+  }, [quickAddCard]);
+
   const handleKeyDown = useCallback(async (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return;
     if (quickAddCard || groupedResults.length !== 1) return;
@@ -282,6 +472,8 @@ export default function AddCardsPage() {
     }
     const card = cards[0];
     setQuickAddCard(card);
+    setQuickLoc(selectedLoc);
+    setQuickDest(destLoc);
     const fs = foilState(card);
     setQuickForm({ ...defaultForm(), foil: fs.foilOnly });
   }, [quickAddCard, groupedResults, printings]);
@@ -896,9 +1088,9 @@ export default function AddCardsPage() {
         )}
       </Box>
 
-      <Modal opened={!!quickAddCard} onClose={() => setQuickAddCard(null)} title="Quick Add" size="md" centered>
+      <Modal opened={!!quickAddCard} onClose={() => setQuickAddCard(null)} title="Quick Add" size="md" centered closeOnEscape={false}>
         {quickAddCard && (
-          <Box>
+          <Box ref={quickModalRef}>
             <Group gap="lg" mb="md" wrap="nowrap" align="flex-start">
               <Box w={265} h={370} style={{ overflow: 'hidden', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', position: 'relative' }}>
                 <img
@@ -925,14 +1117,14 @@ export default function AddCardsPage() {
                 <Text size="xs" c="dimmed" mt={2}>{quickAddCard.typeLine}</Text>
                 <Tags card={quickAddCard} />
                 <Text size="xs" mt="sm">
-                  Market: <b>$${parseFloat(quickForm.foil ? (quickAddCard.prices?.usd_foil || '0') : (quickAddCard.prices?.usd || '0')).toFixed(2)}</b>
+                  Market: <b>${parseFloat(quickForm.foil ? (quickAddCard.prices?.usd_foil || '0') : (quickAddCard.prices?.usd || '0')).toFixed(2)}</b>
                   {quickAddCard.prices?.usd && !quickForm.foil && quickAddCard.prices?.usd_foil ? ` / Foil: $${parseFloat(quickAddCard.prices.usd_foil).toFixed(2)}` : ''}
                   {quickAddCard.prices?.usd && quickForm.foil ? ` / Nonfoil: $${parseFloat(quickAddCard.prices.usd).toFixed(2)}` : ''}
                 </Text>
               </div>
             </Group>
             <Group gap="sm" mb="sm">
-              <NumberInput label="Qty" value={quickForm.quantity} onChange={v => setQuickForm(f => ({ ...f, quantity: Number(v) || 1 }))} min={1} max={999} w={70} size="sm" />
+              <NumberInput label="Qty" value={quickForm.quantity} onChange={v => setQuickForm(f => ({ ...f, quantity: Number(v) || 1 }))} min={1} max={999} w={70} size="sm" ref={qtyInputRef} />
               <Switch label="Foil" checked={quickForm.foil} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foil: v })); }}
                 disabled={!foilState(quickAddCard).canFoil || foilState(quickAddCard).foilOnly} size="sm" onLabel="F" offLabel="N" mt={24} />
             </Group>
@@ -943,15 +1135,24 @@ export default function AddCardsPage() {
                 styles={{ root: { gap: 2 }, label: { fontWeight: 600, fontSize: 11, padding: '2px 6px' }, indicator: { backgroundColor: CONDITION_COLORS[quickForm.condition] || '#00897b' } }} />
             </Box>
             <Group gap="sm" mb="sm">
-              <TextInput label="Price ($)" value={quickForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, purchasePrice: v })); }}
-                placeholder={quickForm.foil ? (quickAddCard.prices?.usd_foil || '0.00') : (quickAddCard.prices?.usd || '0.00')} size="sm" w={120}
-                leftSection={<Text size="xs" c="dimmed">$</Text>} />
+              <Box style={{ position: 'relative' }}>
+                <TextInput label="Price ($)" value={quickForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, purchasePrice: v })); setInvalidField(prev => prev === 'price' ? null : prev); }}
+                  placeholder={quickForm.foil ? (quickAddCard.prices?.usd_foil || '0.00') : (quickAddCard.prices?.usd || '0.00')} size="sm" w={120}
+                  leftSection={<Text size="xs" c="dimmed">$</Text>} ref={priceInputRef} onBlur={formatPrice} />
+                {invalidField === 'price' && <InvalidBubble />}
+              </Box>
               <Switch label="Pack opened" checked={quickForm.packOpened} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, packOpened: v })); }} size="sm" mt={24} />
             </Group>
-            <Select label="Destination (optional)" placeholder="No destination" clearable
+            <Box style={{ position: 'relative' }}>
+              <Select label="Location" placeholder="Select location" searchable selectFirstOptionOnChange
+                data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                value={quickLoc} onChange={v => { setQuickLoc(v); setInvalidField(prev => prev === 'location' ? null : prev); }} mb="sm" size="sm" ref={locInputRef} />
+              {invalidField === 'location' && <InvalidBubble />}
+            </Box>
+            <Select label="Destination (optional)" placeholder="No destination" clearable searchable selectFirstOptionOnChange
               data={locations.map(l => ({ value: String(l.id), label: l.name }))}
-              value={destLoc} onChange={setDestLoc} mb="sm" size="sm" />
-            <TextInput label="Notes" value={quickForm.notes} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, notes: v })); }} placeholder="notes" size="sm" mb="md" />
+              value={quickDest} onChange={setQuickDest} mb="sm" size="sm" ref={destInputRef} />
+            <TextInput label="Notes" value={quickForm.notes} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, notes: v })); }} placeholder="notes" size="sm" mb="md" ref={notesInputRef} />
             <Group justify="flex-end">
               <Button variant="default" onClick={() => setQuickAddCard(null)}>Cancel</Button>
               <Button onClick={handleQuickAdd} loading={adding} leftSection={<IconPlus size={16} />}>Add to Collection</Button>
@@ -959,6 +1160,16 @@ export default function AddCardsPage() {
             <Group gap="xs" mt="md" justify="center">
               <Badge size="xs" variant="light" color="gray">Enter</Badge>
               <Text size="xs" c="dimmed">Add</Text>
+              <Badge size="xs" variant="light" color="gray">L</Badge>
+              <Text size="xs" c="dimmed">Location</Text>
+              <Badge size="xs" variant="light" color="gray">D</Badge>
+              <Text size="xs" c="dimmed">Destination</Text>
+              <Badge size="xs" variant="light" color="gray">P</Badge>
+              <Text size="xs" c="dimmed">Price</Text>
+              <Badge size="xs" variant="light" color="gray">Q</Badge>
+              <Text size="xs" c="dimmed">Qty</Text>
+              <Badge size="xs" variant="light" color="gray">N</Badge>
+              <Text size="xs" c="dimmed">Notes</Text>
               <Badge size="xs" variant="light" color="gray">← →</Badge>
               <Text size="xs" c="dimmed">Condition</Text>
               <Badge size="xs" variant="light" color="gray">↑ ↓</Badge>

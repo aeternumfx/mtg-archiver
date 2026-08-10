@@ -53,6 +53,42 @@ npm start
 
 Serves the built frontend from Express at **http://localhost:3001**.
 
+### Docker
+
+```bash
+# Build and run with docker compose
+docker compose up -d --build   # http://localhost:3001, data stored in ./data
+
+# Or build + run manually
+docker build -t mtg-archiver .
+docker run -d -p 3001:3001 -v $PWD/data:/app/data --name mtg-archiver mtg-archiver
+```
+
+- `DATA_DIR` (default `/app/data`) controls where the SQLite database lives; mount a volume there so data persists.
+- `PORT` (default `3001`) changes the listen port.
+
+### Building a release artifact (for GitHub releases)
+
+```bash
+./release/build-docker.sh            # uses current git tag, or "dev"
+./release/build-docker.sh v0.1.0     # specify a version
+```
+
+This builds the image and packages it into `release/mtg-archiver-<version>.zip`
+— a self-contained "run pack" containing the Docker image, a `docker-compose.yml`,
+a `load.sh`/`load.bat`, and a beginner-friendly `README.txt`. Attach the `.zip`
+to a GitHub release.
+
+**End users install it like this (no source code needed):**
+
+*Easiest (click, no typing):* unzip → **drag the `.tar` onto the Docker Desktop
+window** to load the image → open Docker Desktop → Images → click Run on
+`mtg-archiver` → set the host port to `3001` → open `http://localhost:3001`.
+
+*Or from a terminal:* unzip → `sh load.sh` (Windows: `load.bat`) → `docker compose up -d`
+→ open `http://localhost:3001`. Their data is stored in a `data/` folder next to the
+compose file, so upgrades and backups carry over.
+
 ## First Run
 
 On first startup, the app downloads the Scryfall bulk data file (~73 MB compressed, ~530 MB uncompressed, ~116,000 cards). This takes 30-60 seconds. Subsequent startups only sync if data is older than 24 hours.
