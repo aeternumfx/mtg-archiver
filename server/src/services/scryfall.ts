@@ -1,5 +1,6 @@
-import { db, sqlite, schema } from '../db';
+import { catalogDb, catalogSqlite, schema } from '../db';
 import { eq, sql } from 'drizzle-orm';
+import { recordCall } from './apiCalls';
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
@@ -23,7 +24,7 @@ export function getSyncStatus() {
 
 async function getLastSyncFromDb(): Promise<string | null> {
   try {
-    const row = db.select().from(schema.syncMeta).where(eq(schema.syncMeta.key, 'last_sync')).get();
+    const row = catalogDb.select().from(schema.syncMeta).where(eq(schema.syncMeta.key, 'last_sync')).get();
     return row?.value ?? null;
   } catch {
     return null;
@@ -31,7 +32,7 @@ async function getLastSyncFromDb(): Promise<string | null> {
 }
 
 async function setLastSync(date: string) {
-  db.insert(schema.syncMeta)
+  catalogDb.insert(schema.syncMeta)
     .values({ key: 'last_sync', value: date })
     .onConflictDoUpdate({ target: schema.syncMeta.key, set: { value: date } })
     .run();
@@ -39,17 +40,18 @@ async function setLastSync(date: string) {
 
 const BOOSTER_SET_TYPES = new Set(['core', 'expansion', 'draft_innovation', 'masters', 'starter']);
 
-async function syncSets(): Promise<void> {
+export async function syncSets(): Promise<void> {
   try {
+    recordCall('scryfall');
     const res = await fetch('https://api.scryfall.com/sets', {
       headers: { 'User-Agent': 'MTG-Archiver/1.0' },
     });
     if (!res.ok) throw new Error(`Failed to fetch sets: ${res.status}`);
     const body = await res.json() as { data: Array<{ code: string; name: string; set_type: string; released_at?: string; updated_at?: string }> };
 
-    const insertSet = sqlite.prepare(`INSERT OR REPLACE INTO sets (code, name, set_type, has_boosters, released_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
+    const insertSet = catalogSqlite.prepare(`INSERT OR REPLACE INTO sets (code, name, set_type, has_boosters, released_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
 
-    sqlite.transaction(() => {
+    catalogSqlite.transaction(() => {
       for (const s of body.data) {
         insertSet.run(s.code, s.name, s.set_type, BOOSTER_SET_TYPES.has(s.set_type) ? 1 : 0, s.released_at ?? null, s.updated_at ?? null);
       }
@@ -100,6 +102,7 @@ interface ScryfallCard {
 }
 
 async function fetchBulkDataInfo(): Promise<BulkDataEntry | null> {
+  recordCall('scryfall');
   const res = await fetch('https://api.scryfall.com/bulk-data', {
     headers: { 'User-Agent': 'MTG-Archiver/1.0' },
   });
@@ -140,7 +143,7 @@ function processBatch(cards: ScryfallCard[]) {
     cardFaces: c.card_faces ? JSON.stringify(c.card_faces) : null,
   }));
 
-  db.insert(schema.scryfallCards)
+  catalogDb.insert(schema.scryfallCards)
     .values(values)
     .onConflictDoUpdate({
       target: schema.scryfallCards.id,
@@ -189,6 +192,7 @@ async function downloadAndSync(downloadUri: string, compressedSize: number): Pro
 
     let bytesRead = 0;
 
+    recordCall('scryfall');
     const res = await fetch(downloadUri, {
       headers: {
         'User-Agent': 'MTG-Archiver/1.0',
@@ -245,7 +249,7 @@ async function downloadAndSync(downloadUri: string, compressedSize: number): Pro
 
         if (batch.length >= 500) {
           rl.pause();
-          sqlite.transaction(() => processBatch(batch.splice(0)))();
+          catalogSqlite.transaction(() => processBatch(batch.splice(0)))();
           totalProcessed += 500;
           progress = Math.min(95, 50 + Math.round((totalProcessed / expectedTotalCards) * 45));
           stage = `Processing cards... ${totalProcessed.toLocaleString()} done`;
@@ -255,7 +259,7 @@ async function downloadAndSync(downloadUri: string, compressedSize: number): Pro
 
       rl.on('close', () => {
         if (batch.length > 0) {
-          sqlite.transaction(() => processBatch(batch.splice(0)))();
+          catalogSqlite.transaction(() => processBatch(batch.splice(0)))();
           totalProcessed += batch.length;
         }
         stage = `Processing complete: ${totalProcessed.toLocaleString()} cards`;

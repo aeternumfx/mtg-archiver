@@ -212,7 +212,7 @@ export default function WantlistPage() {
         <Button leftSection={<IconPlus size={16} />} onClick={openAddDialog}>Add Card</Button>
       </Group>
 
-      <Box pos="relative">
+      <Box pos="relative" data-tour="wantlist-list">
         <LoadingOverlay visible={loading} />
 
         {items.length === 0 && !loading && (

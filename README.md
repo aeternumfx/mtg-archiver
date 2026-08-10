@@ -14,9 +14,13 @@ A self-hosted web application for cataloging, managing, and tracking a Magic: Th
 - **Dashboard** — collection value over time, rarity/condition/location breakdowns, unrealized P&L
 - **Booster Opener** — log pack openings, track value vs cost, add pulls to collection
 - **Undo system** — global undo toasts (bottom-right, countdown, dismissible) that persist across pages
-- **Onboarding** — a welcome tour on first run (re-triggered after a full reset, or via Settings → Replay Intro Tour) that offers a demo instance, a recommended setup, or a blank slate
-- **Scryfall Sync** — automatic daily sync of card data and prices (gzipped JSONL format)
-- **Export/Import** — full backup of your collection, wantlist, decks, trades, and history as JSON; restore or merge later
+- **Onboarding** — a welcome tour on first sign-in (re-triggered after a full reset, or via Settings → Replay Intro Tour)
+- **Multi-user** — each user gets their own private, isolated database; accounts are provisioned by a central admin (enrollment model, no public signup)
+- **Admin console** — create users, reset passwords, enable/disable or permanently delete accounts
+- **Scheduler** — all outbound API calls are centralized in one job scheduler (Scryfall bulk sync runs on a single-flight, staleness-aware schedule)
+- **Image proxy** — card images are served through the server with a disk cache, so clients never hit the Scryfall CDN directly
+- **Scryfall Sync** — automatic daily sync of card data and prices (gzipped JSONL format), stored once in a shared catalog
+- **Export/Import** — full backup of your collection, wantlist, decks, trades, and history as JSON; restore or merge later (per user)
 - **Themes** — Light, Dark, and Galaxy UI themes
 
 ## Quick Start
@@ -64,8 +68,26 @@ docker build -t mtg-archiver .
 docker run -d -p 3001:3001 -v $PWD/data:/app/data --name mtg-archiver mtg-archiver
 ```
 
-- `DATA_DIR` (default `/app/data`) controls where the SQLite database lives; mount a volume there so data persists.
+- `DATA_DIR` (default `/app/data`) controls where all data lives; mount a volume there so it persists.
 - `PORT` (default `3001`) changes the listen port.
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3001` | HTTP listen port |
+| `DATA_DIR` | `./data` (or `/app/data` in Docker) | Root data directory |
+| `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` | `admin` / `admin` | Creates the first admin on first boot (only when no users exist). **Change the default password after first sign-in.** |
+| `SESSION_TTL_DAYS` | `30` | How long a sign-in session lasts |
+| `COOKIE_SECURE` | `false` | Set `true` to mark the session cookie `Secure` (use behind HTTPS) |
+| `ALLOWED_ORIGINS` | — | Comma-separated list of allowed CORS origins (defaults to same-origin only) |
+| `SCRYFALL_STALE_HOURS` | `24` | How stale the card catalog must be before the scheduler re-downloads the full Scryfall bulk file. The lightweight sets list refreshes hourly on its own. |
+
+You can also create the first admin from the command line:
+
+```bash
+npm run create-admin -w server -- --username admin --password 'a-strong-password' --role admin
+```
 
 ### Building a release artifact (for GitHub releases)
 
@@ -91,9 +113,13 @@ compose file, so upgrades and backups carry over.
 
 ## First Run
 
-On first startup, the app downloads the Scryfall bulk data file (~73 MB compressed, ~530 MB uncompressed, ~116,000 cards). This takes 30-60 seconds. Subsequent startups only sync if data is older than 24 hours.
+On first startup, the app downloads the Scryfall bulk data file (~73 MB compressed, ~530 MB uncompressed, ~116,000 cards) once into the **shared catalog**. This takes 30-60 seconds. Subsequent startups only sync if data is older than 24 hours. Users do not download anything — they all read the one shared catalog.
 
-If you don't want to wait, you can skip the sync and use the app immediately — the sync runs in the background and your collection works without it.
+Before anyone can sign in you need an admin account. Either set `INITIAL_ADMIN_USERNAME`/`INITIAL_ADMIN_PASSWORD` before the first start, or run the `create-admin` script above. Then:
+
+1. Sign in as the admin.
+2. Use the **Admin** page (user menu → Admin) to create accounts.
+3. Share each user's one-time temporary password with them; they'll set their own password on first sign-in.
 
 ## Project Structure
 
@@ -101,23 +127,46 @@ If you don't want to wait, you can skip the sync and use the app immediately —
 mtg-archiver/
 ├── client/          # React SPA (Vite + Mantine + Recharts)
 │   └── src/
-│       ├── pages/       # Route pages
+│       ├── pages/       # Route pages (incl. landing, login, admin)
 │       ├── components/  # Shared components
+│       ├── auth/        # Auth context, route guards, password change
 │       ├── api/         # API client
 │       └── types/       # TypeScript interfaces
 ├── server/          # Express API (Drizzle ORM + better-sqlite3)
 │   └── src/
-│       ├── routes/      # API endpoints
-│       ├── services/    # Scryfall sync
-│       └── db/          # Schema, migration, connection
-└── data/            # SQLite database (created on first run)
+│       ├── routes/      # API endpoints (auth, admin, user data, images)
+│       ├── services/    # Scryfall sync, card catalog hydration, image proxy
+│       ├── scheduler/   # Centralized job scheduler
+│       ├── auth/        # Passwords, sessions, middleware, user management
+│       └── db/          # System + per-user connections, schema, init
+└── data/            # All data (created on first run)
 ```
 
 ## Data
 
-All data is stored in a local SQLite file at `data/mtg.db`. The Scryfall card database is ~270 MB. Your collection, locations, decks, wantlist, trades, and settings are stored in the same file.
+Data is split across two SQLite tiers under `DATA_DIR`:
 
-**Back up your data regularly** using Settings → Export Data. The backup includes everything (collection, locations, decks + ghost cards, wantlist + collection goals, trades, boosters, and movement history). You can restore it later with Import Data.
+- `system.db` — shared read-only card catalog (`scryfall_cards`, `sets`), the sync scheduler state, and auth (`users`, `sessions`).
+- `users/user_<id>.db` — one database **per user**, holding their locations, decks, collection, wantlist, trades, boosters, and movement history. Users can only ever read/write their own file.
+- `images/` — cached card images fetched through the proxy.
+
+**Back up regularly** by copying the whole `DATA_DIR` folder, or use Settings → Export Data (per user) for a portable JSON backup.
+
+## Updates & backups
+
+- **Admin → Updates** page: shows the current version, checks the GitHub releases for the latest tag, lets you **back up & download** (a consistent, user-data-only zip of `system.db` + every per-user database — no Scryfall catalog or image cache), **restore from a backup** (overwrites all data; requires typing `RESTORE` to confirm), and trigger an update.
+- **Updating**: the in-app button downloads a local copy, has the server back up internally (to `data/backups/`), then pulls and recreates the container — but only if you've opted in by mounting the Docker socket and compose file and setting `ENABLE_IN_APP_UPDATE=true`. Otherwise it shows the manual fallback: `./update.sh` (i.e. `docker compose pull && docker compose up -d`). The release zip ships `update.sh` and `backup.sh`.
+- A dismissible **update-available** banner appears in the admin view when a newer release is found.
+
+> **Security note:** enabling in-app auto-update mounts `/var/run/docker.sock` into the container, which gives the app host-level Docker control. Use the host `update.sh` if you prefer not to.
+
+## Security notes
+
+- Passwords are hashed with scrypt (salted, per-user).
+- Sessions use random opaque tokens stored hashed in the DB, delivered in `httpOnly` cookies (`SameSite=Strict`; `Secure` with `COOKIE_SECURE=true`).
+- All `/api/*` routes except login require authentication; `/api/admin/*` requires the admin role.
+- Login is rate-limited to mitigate brute forcing.
+- Helmet security headers and a restrictive CORS policy are enabled by default.
 
 ## Alpha Status
 

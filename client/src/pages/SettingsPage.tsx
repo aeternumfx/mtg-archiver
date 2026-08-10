@@ -15,7 +15,6 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [deleteMode, setDeleteMode] = useState<'wipe' | 'basic' | 'demo'>('wipe');
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteOpened, { open: openDelete, close: closeDelete }] = useDisclosure(false);
@@ -64,10 +63,11 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
     if (deleteConfirm !== 'i am sure') return;
     setDeleting(true);
     try {
-      const res = await api.data.delete(deleteMode);
+      const res = await api.data.delete();
       setImportMsg({ type: 'ok', text: res.message });
       closeDelete();
       setDeleteConfirm('');
+      window.dispatchEvent(new Event('mtg:show-initial-setup'));
     } catch (err: any) {
       setImportMsg({ type: 'error', text: err.message });
     } finally {
@@ -77,7 +77,7 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
 
   return (
     <>
-      <Title order={2} mb="lg">Settings</Title>
+      <Title order={2} mb="lg" data-tour="settings-page">Settings</Title>
 
       <Card shadow="sm" padding="lg" radius="md" withBorder mb="md">
         <Text fw={600} mb="md">Theme</Text>
@@ -216,56 +216,16 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
         </Button>
       </Card>
 
-      <Modal opened={deleteOpened} onClose={closeDelete} title="Delete All Data" size="md" centered>
+      <Modal opened={deleteOpened} onClose={closeDelete} title="Delete All Data" size="sm" centered>
         <Alert icon={<IconAlertTriangle size={16} />} title="Warning" color="red" mb="md">
           This will permanently delete all your collection data, locations, decks,
-          and history. Consider <b>exporting your data first</b> as a backup.
+          and history, and start you back at the initial setup. Consider{' '}
+          <b>exporting your data first</b> as a backup.
           <Button size="compact-xs" variant="light" leftSection={<IconDownload size={12} />}
             onClick={handleExport} loading={exporting} ml="sm">
             Export Now
           </Button>
         </Alert>
-
-        <Radio.Group value={deleteMode} onChange={v => setDeleteMode(v as 'wipe' | 'basic' | 'demo')} mb="md">
-          <Stack gap="sm">
-            <Card withBorder radius="sm" padding="sm" style={{ cursor: 'pointer' }}
-              onClick={() => setDeleteMode('wipe')}
-              bg={deleteMode === 'wipe' ? 'var(--mantine-color-red-0)' : undefined}
-            >
-              <Group>
-                <Radio value="wipe" checked={deleteMode === 'wipe'} readOnly />
-                <div>
-                  <Text fw={500} size="sm">Wipe everything</Text>
-                  <Text size="xs" c="dimmed">Delete all data. Start completely fresh.</Text>
-                </div>
-              </Group>
-            </Card>
-            <Card withBorder radius="sm" padding="sm" style={{ cursor: 'pointer' }}
-              onClick={() => setDeleteMode('basic')}
-              bg={deleteMode === 'basic' ? 'var(--mantine-color-blue-0)' : undefined}
-            >
-              <Group>
-                <Radio value="basic" checked={deleteMode === 'basic'} readOnly />
-                <div>
-                  <Text fw={500} size="sm">Wipe + basic setup</Text>
-                  <Text size="xs" c="dimmed">Delete everything and create starter groups: Binders, Bulk, Decks.</Text>
-                </div>
-              </Group>
-            </Card>
-            <Card withBorder radius="sm" padding="sm" style={{ cursor: 'pointer' }}
-              onClick={() => setDeleteMode('demo')}
-              bg={deleteMode === 'demo' ? 'var(--mantine-color-blue-0)' : undefined}
-            >
-              <Group>
-                <Radio value="demo" checked={deleteMode === 'demo'} readOnly />
-                <div>
-                  <Text fw={500} size="sm">Wipe + demo data</Text>
-                  <Text size="xs" c="dimmed">Replace everything with demo binders, decks, and sample cards.</Text>
-                </div>
-              </Group>
-            </Card>
-          </Stack>
-        </Radio.Group>
 
         <TextInput
           placeholder='Type "i am sure" to confirm'
@@ -282,7 +242,7 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
             loading={deleting}
             disabled={deleteConfirm !== 'i am sure'}
           >
-            {deleteMode === 'wipe' ? 'Delete Everything' : deleteMode === 'basic' ? 'Reset with Setup' : 'Load Demo Data'}
+            Delete Everything
           </Button>
         </Group>
       </Modal>

@@ -6,7 +6,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconArrowRight, IconCheck, IconPlus, IconArrowsSort, IconHistory, IconX } from '@tabler/icons-react';
-import { api } from '../api/client';
+import { api, authFetch } from '../api/client';
 import type { Location, ScryfallCard } from '../types';
 import { CardThumb, SetSymbol, GhostThumb } from '../components/CardDisplay';
 import { CardGroup } from '../components/CardGroup';
@@ -76,7 +76,7 @@ export default function OrganizePage() {
   useEffect(() => {
     if (!srcLoc) { setLocCards([]); return; }
     setLocCardsLoading(true);
-    fetch(`/api/collection/grouped?location_id=${srcLoc}&pageSize=100`)
+    authFetch(`/api/collection/grouped?location_id=${srcLoc}&pageSize=100`)
       .then(r => r.json())
       .then(data => {
         const cards: CollectionCard[] = (data.groups || []).flatMap((g: any) =>
@@ -281,7 +281,7 @@ export default function OrganizePage() {
           })}
         </Box>
       ) : (
-        <Box pos="relative">
+        <Box pos="relative" data-tour="organize-pending">
           <LoadingOverlay visible={loading} />
           {items.length === 0 && !loading && <Text c="dimmed" ta="center" py="xl">No pending movements.</Text>}
           {items.length > 0 && (() => {

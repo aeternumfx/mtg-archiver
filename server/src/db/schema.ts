@@ -59,11 +59,11 @@ export const decks = sqliteTable('decks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull().unique(),
   description: text('description'),
-  cardId: text('card_id').references(() => scryfallCards.id),
+  cardId: text('card_id'),
   deckType: text('deck_type').notNull().default('custom'),
-  commanderCardId: text('commander_card_id').references(() => scryfallCards.id),
-  partnerCardId: text('partner_card_id').references(() => scryfallCards.id),
-  backgroundCardId: text('background_card_id').references(() => scryfallCards.id),
+  commanderCardId: text('commander_card_id'),
+  partnerCardId: text('partner_card_id'),
+  backgroundCardId: text('background_card_id'),
   commanderItemId: integer('commander_item_id'),
   partnerItemId: integer('partner_item_id'),
   backgroundItemId: integer('background_item_id'),
@@ -84,7 +84,7 @@ export const deckRequiredCards = sqliteTable('deck_required_cards', {
 
 export const collectionItems = sqliteTable('collection_items', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  cardId: text('card_id').notNull().references(() => scryfallCards.id),
+  cardId: text('card_id').notNull(),
   locationId: integer('location_id').notNull().references(() => locations.id),
   destinationId: integer('destination_id').references(() => locations.id),
   deckId: integer('deck_id').references(() => decks.id),
@@ -122,6 +122,39 @@ export const syncMeta = sqliteTable('sync_meta', {
   value: text('value').notNull(),
 });
 
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  username: text('username').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('user'),
+  mustChangePassword: integer('must_change_password').notNull().default(0),
+  disabled: integer('disabled').notNull().default(0),
+  demo: integer('demo').notNull().default(0),
+  createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
+  lastLoginAt: text('last_login_at'),
+});
+
+export const sessions = sqliteTable('sessions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tokenHash: text('token_hash').notNull().unique(),
+  userId: integer('user_id').notNull().references(() => users.id),
+  impersonatedBy: integer('impersonated_by').references(() => users.id),
+  createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
+  expiresAt: text('expires_at').notNull(),
+});
+
+export const userRequests = sqliteTable('user_requests', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull().references(() => users.id),
+  username: text('username').notNull(),
+  type: text('type').notNull(),
+  subject: text('subject').notNull(),
+  message: text('message'),
+  urgent: integer('urgent').notNull().default(0),
+  status: text('status').notNull().default('open'),
+  createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
+});
+
 export const boosterSessions = sqliteTable('booster_sessions', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   setCode: text('set_code').notNull(),
@@ -145,6 +178,7 @@ export const wantlistItems = sqliteTable('wantlist_items', {
   destinationId: integer('destination_id'),
   collectionGoalId: integer('collection_goal_id'),
   deckRequiredId: integer('deck_required_id'),
+  tradeId: integer('trade_id'),
   persistent: integer('persistent').notNull().default(0),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
 });
@@ -170,6 +204,8 @@ export const trades = sqliteTable('trades', {
   theirCash: real('their_cash').notNull().default(0),
   contactInfo: text('contact_info'),
   notes: text('notes'),
+  receivedLocationId: integer('received_location_id'),
+  receivedDestinationId: integer('received_destination_id'),
   completedAt: text('completed_at'),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
   updatedAt: text('updated_at').notNull().$default(() => new Date().toISOString()),
@@ -187,6 +223,8 @@ export const tradeItems = sqliteTable('trade_items', {
   condition: text('condition'),
   quantity: integer('quantity').notNull().default(1),
   price: real('price'),
+  locationId: integer('location_id'),
+  destinationId: integer('destination_id'),
 });
 
 export const movementHistory = sqliteTable('movement_history', {
@@ -206,7 +244,7 @@ export const movementHistory = sqliteTable('movement_history', {
 export const boosterPulls = sqliteTable('booster_pulls', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   sessionId: integer('session_id').notNull().references(() => boosterSessions.id),
-  cardId: text('card_id').notNull().references(() => scryfallCards.id),
+  cardId: text('card_id').notNull(),
   foil: integer('foil').notNull().default(0),
   slotIndex: integer('slot_index').notNull(),
   locationId: integer('location_id').references(() => locations.id),

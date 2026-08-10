@@ -1,41 +1,19 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Title, Group, Text, Paper, Badge, Button, TextInput, NumberInput, Textarea,
-  Box, ActionIcon, Modal, ScrollArea, Select,
+  Box, ActionIcon, Modal, ScrollArea, Select, Alert,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconTrash, IconSearch, IconHistory, IconPlus, IconRotate } from '@tabler/icons-react';
-import { api } from '../api/client';
+import { IconTrash, IconSearch, IconHistory, IconPlus, IconRotate, IconRotateClockwise, IconAlertTriangle } from '@tabler/icons-react';
+import { api, authFetch } from '../api/client';
 import type { ScryfallCard, Location } from '../types';
 import { CardThumb, SetSymbol } from '../components/CardDisplay';
-
-interface TradeItem {
-  tempId: string;
-  side?: string;
-  cardId?: string;
-  cardName: string;
-  setCode?: string;
-  collectorNumber?: string;
-  foil?: number;
-  condition?: string | null;
-  quantity: number;
-  price: number | null;
-  imageUris?: Record<string, string> | null;
-  prices?: Record<string, string | null> | null;
-}
-
-interface Trade {
-  id?: number;
-  title?: string;
-  status: string;
-  yourCash: number;
-  theirCash: number;
-  contactInfo?: string;
-  notes?: string;
-  createdAt?: string;
-  items: TradeItem[];
-}
+import {
+  useTradeBuilder, getBuilder, patchActiveTrade, clearActiveTrade, setShowHistory, setSelectedLoc,
+  type TradeItem, type Trade,
+} from '../stores/tradeBuilder';
 
 let tempIdCounter = 0;
 function nextTempId() { return `tmp_${++tempIdCounter}`; }
@@ -64,10 +42,10 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
       if (selectedLoc) params.set('location_id', selectedLoc);
       if (!params.has('q') && !params.has('location_id')) { setResults([]); return; }
       params.set('pageSize', '20');
-      const res = await fetch(`/api/collection/grouped?${params}`);
+      const res = await authFetch(`/api/collection/grouped?${params}`);
       const data = await res.json();
       const qtyMap = new Map<string, number>();
-      const mapped: (ScryfallCard & { ownedQty?: number })[] = (data.groups || []).flatMap((g: any) =>
+      const mapped: (ScryfallCard & { ownedQty?: number; locationId?: number })[] = (data.groups || []).flatMap((g: any) =>
         (g.items || []).map((i: any) => {
           const id = i.cardId;
           qtyMap.set(id, (qtyMap.get(id) || 0) + (i.quantity || 0));
@@ -75,8 +53,8 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
             id, name: i.card.name, setName: i.card.setName,
             setCode: i.card.setCode, collectorNumber: i.card.collectorNumber,
             prices: i.card.prices, imageUris: i.card.imageUris, ownedQty: i.quantity,
-            foil: i.foil,
-          } as ScryfallCard & { ownedQty?: number; foil?: number };
+            foil: i.foil, locationId: i.locationId,
+          } as ScryfallCard & { ownedQty?: number; foil?: number; locationId?: number };
         }));
       setOwnedByCardId(qtyMap);
       setResults(mapped);
@@ -105,7 +83,7 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
     }
   }, [q, selectedLoc, side]);
 
-  const handleSelect = (c: ScryfallCard & { foil?: number }) => {
+  const handleSelect = (c: ScryfallCard & { foil?: number; locationId?: number }) => {
     const isFoil = c.foil || 0;
     const autoPrice = parseFloat(isFoil ? (c.prices?.usd_foil || '0') : (c.prices?.usd || '0')) || null;
     onAdd({
@@ -113,6 +91,7 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
       setCode: c.setCode, collectorNumber: c.collectorNumber,
       quantity: 1, foil: isFoil, price: autoPrice,
       imageUris: c.imageUris, prices: c.prices,
+      locationId: (c as any).locationId ?? undefined,
     });
     closeAdd();
     setQ('');
@@ -160,6 +139,32 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
                     w={56} size="xs" leftSection={<Text size="xs" c="dimmed">$</Text>} />
                   <ActionIcon variant="subtle" color="red" size="sm" onClick={() => onRemove(item.tempId)}><IconTrash size={12} /></ActionIcon>
                 </Group>
+                {!isYours && (
+                  <Group gap={4} justify="center" mt={2} align="flex-end" wrap="nowrap">
+                    <div>
+                      <Text size="9px" c="dimmed" ta="center" mb={2}>Location</Text>
+                      <Select
+                        size="xs"
+                        w={76}
+                        data={[{ value: '', label: 'Default' }, ...locations.map(l => ({ value: String(l.id), label: l.name }))]}
+                        value={item.locationId ? String(item.locationId) : ''}
+                        onChange={v => onUpdate(item.tempId, { locationId: v ? Number(v) : null })}
+                        styles={{ input: { fontSize: 11, minHeight: 24, height: 24 } }}
+                      />
+                    </div>
+                    <div>
+                      <Text size="9px" c="dimmed" ta="center" mb={2}>Destination</Text>
+                      <Select
+                        size="xs"
+                        w={76}
+                        data={[{ value: '', label: 'Default' }, ...locations.map(l => ({ value: String(l.id), label: l.name }))]}
+                        value={item.destinationId ? String(item.destinationId) : ''}
+                        onChange={v => onUpdate(item.tempId, { destinationId: v ? Number(v) : null })}
+                        styles={{ input: { fontSize: 11, minHeight: 24, height: 24 } }}
+                      />
+                    </div>
+                  </Group>
+                )}
               </Paper>
             ) : (
               <Paper key={`empty-${idx}`} withBorder p="md" radius="sm" style={{ cursor: 'pointer', aspectRatio: '5/7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -226,16 +231,19 @@ function SidePanel({ side, items, onAdd, onRemove, onUpdate, cash, onCashChange,
 
 export default function TradesPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [activeTrade, setActiveTrade] = useState<Trade>({ status: 'active', yourCash: 0, theirCash: 0, items: [] });
-  const [showHistory, setShowHistory] = useState(false);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [selectedLoc, setSelectedLoc] = useState<string | null>(null);
+  const { activeTrade, showHistory, selectedLoc } = useTradeBuilder();
+  const [resetOpen, { open: openReset, close: closeReset }] = useDisclosure(false);
+  const [searchParams] = useSearchParams();
 
   const loadTrades = async () => {
     try {
       const data = await api.trades.list();
       setTrades(data);
-    } catch {}
+      return data;
+    } catch {
+      return [];
+    }
   };
 
   useEffect(() => {
@@ -243,14 +251,24 @@ export default function TradesPage() {
     api.locations.list().then(setLocations).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const tradeParam = searchParams.get('trade');
+    if (!tradeParam) return;
+    loadTrades().then(data => {
+      const t = data.find(x => String(x.id) === tradeParam);
+      if (t) loadTrade(t);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
   const addItem = (_side: string, item: TradeItem) => {
-    setActiveTrade(prev => ({ ...prev, items: [...prev.items, { ...item }] }));
+    patchActiveTrade({ items: [...activeTrade.items, { ...item }] });
   };
 
   const removeItem = (tempId: string) => {
     const item = activeTrade.items.find(i => i.tempId === tempId);
     if (!item) return;
-    setActiveTrade(prev => ({ ...prev, items: prev.items.filter(i => i.tempId !== tempId) }));
+    patchActiveTrade({ items: activeTrade.items.filter(i => i.tempId !== tempId) });
     const removed = { ...item };
     notifications.show({
       title: 'Removed',
@@ -258,15 +276,13 @@ export default function TradesPage() {
       color: 'orange',
       icon: <IconRotate size={16} />,
       onClick: () => {
-        setActiveTrade(prev => ({ ...prev, items: [...prev.items, { ...removed, tempId: nextTempId() }] }));
+        patchActiveTrade({ items: [...getBuilder().activeTrade.items, { ...removed, tempId: nextTempId() }] });
       },
     });
   };
 
   const updateItem = (tempId: string, updates: Partial<TradeItem>) => {
-    setActiveTrade(prev => ({
-      ...prev, items: prev.items.map(i => i.tempId === tempId ? { ...i, ...updates } : i),
-    }));
+    patchActiveTrade({ items: activeTrade.items.map(i => i.tempId === tempId ? { ...i, ...updates } : i) });
   };
 
   const yourItems = activeTrade.items.filter(i => i.side === 'yours');
@@ -283,18 +299,18 @@ export default function TradesPage() {
 
   const saveCurrentTrade = async (status: string) => {
     try {
+      const payload = {
+        status, title: activeTrade.title, yourCash: activeTrade.yourCash,
+        theirCash: activeTrade.theirCash, contactInfo: activeTrade.contactInfo,
+        notes: activeTrade.notes,
+        receivedLocationId: activeTrade.receivedLocationId ?? null,
+        receivedDestinationId: activeTrade.receivedDestinationId ?? null,
+        items: activeTrade.items,
+      };
       if (activeTrade.id) {
-        await api.trades.update(activeTrade.id, {
-          status, title: activeTrade.title, yourCash: activeTrade.yourCash,
-          theirCash: activeTrade.theirCash, contactInfo: activeTrade.contactInfo,
-          notes: activeTrade.notes, items: activeTrade.items,
-        });
+        await api.trades.update(activeTrade.id, payload);
       } else {
-        await api.trades.create({
-          status, title: activeTrade.title, yourCash: activeTrade.yourCash,
-          theirCash: activeTrade.theirCash, contactInfo: activeTrade.contactInfo,
-          notes: activeTrade.notes, items: activeTrade.items,
-        });
+        await api.trades.create(payload);
       }
       loadTrades();
     } catch (err: any) {
@@ -305,19 +321,19 @@ export default function TradesPage() {
   const handleSave = async () => {
     await saveCurrentTrade('active');
     notifications.show({ title: 'Saved', message: 'Trade saved', color: 'green' });
-    setActiveTrade({ status: 'active', yourCash: 0, theirCash: 0, items: [] });
+    clearActiveTrade();
   };
 
   const handlePending = async () => {
     await saveCurrentTrade('pending');
     notifications.show({ title: 'Pending', message: 'Trade marked as pending', color: 'yellow' });
-    setActiveTrade({ status: 'active', yourCash: 0, theirCash: 0, items: [] });
+    clearActiveTrade();
   };
 
   const handleComplete = async () => {
     await saveCurrentTrade('completed');
     notifications.show({ title: 'Completed', message: 'Trade marked as complete', color: 'green' });
-    setActiveTrade({ status: 'active', yourCash: 0, theirCash: 0, items: [] });
+    clearActiveTrade();
   };
 
   const handleDiscard = async () => {
@@ -325,7 +341,7 @@ export default function TradesPage() {
       await saveCurrentTrade('cancelled');
       notifications.show({ title: 'Cancelled', message: 'Trade discarded and saved as cancelled', color: 'red' });
     }
-    setActiveTrade({ status: 'active', yourCash: 0, theirCash: 0, items: [] });
+    clearActiveTrade();
   };
 
   const loadTrade = async (trade: Trade) => {
@@ -338,13 +354,17 @@ export default function TradesPage() {
       }
       return { ...item, tempId: nextTempId() };
     }));
-    setActiveTrade({ ...trade, items });
+    patchActiveTrade({ ...trade, items });
     setShowHistory(false);
   };
 
   return (
     <>
-      <Group mb="md" justify="space-between">
+      <Alert icon={<IconAlertTriangle size={18} />} color="yellow" variant="filled" mb="md" px="lg" py="sm"
+        styles={{ message: { fontSize: 15, fontWeight: 600, textAlign: 'center' } }}>
+        This is a beta feature and may currently have some bugs. We do not recommend using these features yet.
+      </Alert>
+      <Group mb="md" justify="space-between" data-tour="trades-header">
         <Title order={2}>Trades</Title>
         <Button variant="light" leftSection={<IconHistory size={16} />} onClick={() => setShowHistory(!showHistory)}>
           {showHistory ? 'New Trade' : 'History'}
@@ -386,21 +406,40 @@ export default function TradesPage() {
       ) : (
         <>
           <TextInput label="Trade Title (optional)" placeholder="e.g. Trade with Bob" value={activeTrade.title || ''}
-            onChange={e => { const v = e.currentTarget.value; setActiveTrade(prev => ({ ...prev, title: v })); }} mb="md" size="sm" />
+            onChange={e => { const v = e.currentTarget.value; patchActiveTrade({ title: v }); }} mb="md" size="sm" />
+
+          <Paper withBorder p="sm" radius="md" mb="md">
+            <Text size="sm" fw={600} mb={4}>Received cards</Text>
+            <Text size="xs" c="dimmed" mb="sm">
+              Where incoming cards should go in your collection. You can override these per card.
+            </Text>
+            <Group gap="md">
+              <Select label="Default location" placeholder="Select location" clearable
+                data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                value={activeTrade.receivedLocationId ? String(activeTrade.receivedLocationId) : null}
+                onChange={v => patchActiveTrade({ receivedLocationId: v ? Number(v) : null })}
+                size="sm" w={220} />
+              <Select label="Default destination (optional)" placeholder="No destination" clearable
+                data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                value={activeTrade.receivedDestinationId ? String(activeTrade.receivedDestinationId) : null}
+                onChange={v => patchActiveTrade({ receivedDestinationId: v ? Number(v) : null })}
+                size="sm" w={240} />
+            </Group>
+          </Paper>
 
           <Group gap="md" align="flex-start" mb="md">
             <SidePanel side="yours" items={yourItems} onAdd={item => addItem('yours', item)}
               onRemove={removeItem} onUpdate={updateItem}
-              cash={activeTrade.yourCash} onCashChange={v => setActiveTrade(prev => ({ ...prev, yourCash: v }))}
+              cash={activeTrade.yourCash} onCashChange={v => patchActiveTrade({ yourCash: v })}
               sideLabel="Your Cards (from collection)"
               tradeQtyByCardId={tradeQtyByCardId}
               locations={locations} selectedLoc={selectedLoc} onLocChange={setSelectedLoc} />
             <SidePanel side="theirs" items={theirItems} onAdd={item => addItem('theirs', item)}
               onRemove={removeItem} onUpdate={updateItem}
-              cash={activeTrade.theirCash} onCashChange={v => setActiveTrade(prev => ({ ...prev, theirCash: v }))}
+              cash={activeTrade.theirCash} onCashChange={v => patchActiveTrade({ theirCash: v })}
               sideLabel="Their Cards (any card)"
               tradeQtyByCardId={new Map()}
-              locations={[]} selectedLoc={null} onLocChange={() => {}} />
+              locations={locations} selectedLoc={null} onLocChange={() => {}} />
           </Group>
 
           <Paper withBorder p="md" radius="md" mb="md">
@@ -423,11 +462,12 @@ export default function TradesPage() {
           </Paper>
 
           <Textarea label="Notes" placeholder="Trade notes..." value={activeTrade.notes || ''}
-            onChange={e => { const v = e.currentTarget.value; setActiveTrade(prev => ({ ...prev, notes: v })); }} mb="sm" size="sm" />
+            onChange={e => { const v = e.currentTarget.value; patchActiveTrade({ notes: v }); }} mb="sm" size="sm" />
           <TextInput label="Contact Info (optional)" placeholder="Phone, email, etc." value={activeTrade.contactInfo || ''}
-            onChange={e => { const v = e.currentTarget.value; setActiveTrade(prev => ({ ...prev, contactInfo: v })); }} mb="md" size="sm" />
+            onChange={e => { const v = e.currentTarget.value; patchActiveTrade({ contactInfo: v }); }} mb="md" size="sm" />
 
           <Group justify="flex-end" gap="sm">
+            <Button variant="subtle" color="gray" leftSection={<IconRotateClockwise size={16} />} onClick={openReset}>Reset</Button>
             <Button variant="default" onClick={handleDiscard}>Discard</Button>
             <Button variant="light" onClick={handleSave}>Save</Button>
             <Button variant="light" color="yellow" onClick={handlePending}>Mark Pending</Button>
@@ -435,6 +475,17 @@ export default function TradesPage() {
           </Group>
         </>
       )}
+
+      <Modal opened={resetOpen} onClose={closeReset} title="Reset this trade?" size="sm" centered>
+        <Text size="sm" mb="md">
+          This clears all cards, cash, title, notes and contact info from the current trade. It won't be saved to your
+          trade history.
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={closeReset}>Cancel</Button>
+          <Button color="gray" onClick={() => { clearActiveTrade(); closeReset(); }}>Reset</Button>
+        </Group>
+      </Modal>
     </>
   );
 }

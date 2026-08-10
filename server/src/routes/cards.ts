@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { db, schema } from '../db';
+import { catalogDb, schema } from '../db';
 import { like, or, and, sql, eq, asc, desc } from 'drizzle-orm';
+import { localImageUris, localizeCardFaces } from '../services/cards';
 
 export const cardsRouter = Router();
 
@@ -46,19 +47,19 @@ cardsRouter.get('/find', (req, res) => {
     cardFaces: schema.scryfallCards.cardFaces,
   } as const;
 
-  const parseCard = (c: Record<string, unknown>) => ({
+  const parseCard = (c: any) => ({
     ...c,
-    colors: (c as any).colors ? JSON.parse((c as any).colors) : null,
-    imageUris: (c as any).imageUris ? JSON.parse((c as any).imageUris) : null,
-    prices: (c as any).prices ? JSON.parse((c as any).prices) : null,
-    finishes: (c as any).finishes ? JSON.parse((c as any).finishes) : null,
-    frameEffects: (c as any).frameEffects ? JSON.parse((c as any).frameEffects) : null,
-    cardFaces: (c as any).cardFaces ? JSON.parse((c as any).cardFaces) : null,
+    colors: c.colors ? JSON.parse(c.colors) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
+    prices: c.prices ? JSON.parse(c.prices) : null,
+    finishes: c.finishes ? JSON.parse(c.finishes) : null,
+    frameEffects: c.frameEffects ? JSON.parse(c.frameEffects) : null,
+    cardFaces: localizeCardFaces(c.id, c.cardFaces),
   });
 
   if (parsed.type === 'name') {
     const tokens = q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean);
-    const cards = db.select(cardFields)
+    const cards = catalogDb.select(cardFields)
       .from(schema.scryfallCards)
       .where(and(NOT_ARENA, ...tokens.map(t => like(schema.scryfallCards.name, `%${t}%`))))
       .orderBy(asc(schema.scryfallCards.name), desc(schema.scryfallCards.releasedAt))
@@ -74,7 +75,7 @@ cardsRouter.get('/find', (req, res) => {
   const stripped = rawNum.replace(/^0+/, '');
   if (stripped !== rawNum && stripped.length > 0) numVariants.push(stripped);
 
-  const allMatch = db.select(cardFields)
+  const allMatch = catalogDb.select(cardFields)
     .from(schema.scryfallCards)
     .where(and(
       NOT_ARENA,
@@ -87,7 +88,7 @@ cardsRouter.get('/find', (req, res) => {
     return res.json(allMatch.map(parseCard));
   }
 
-  const likeResult = db.select(cardFields)
+  const likeResult = catalogDb.select(cardFields)
     .from(schema.scryfallCards)
     .where(and(
       NOT_ARENA,
@@ -101,7 +102,7 @@ cardsRouter.get('/find', (req, res) => {
   const result = likeResult.map(c => ({
     ...c,
     colors: c.colors ? JSON.parse(c.colors) : null,
-    imageUris: c.imageUris ? JSON.parse(c.imageUris) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
     prices: c.prices ? JSON.parse(c.prices) : null,
   }));
   res.json(result);
@@ -117,10 +118,10 @@ cardsRouter.get('/search', (req, res) => {
     ? and(NOT_ARENA, or(like(schema.scryfallCards.name, `%${q}%`), like(schema.scryfallCards.typeLine, `%${q}%`), like(schema.scryfallCards.oracleText, `%${q}%`)))
     : NOT_ARENA;
 
-  const countResult = db.select({ count: sql<number>`count(*)` }).from(schema.scryfallCards).where(where).get();
+  const countResult = catalogDb.select({ count: sql<number>`count(*)` }).from(schema.scryfallCards).where(where).get();
   const total = countResult?.count ?? 0;
 
-  const cards = db.select({
+  const cards = catalogDb.select({
     id: schema.scryfallCards.id,
     name: schema.scryfallCards.name,
     setName: schema.scryfallCards.setName,
@@ -149,7 +150,7 @@ cardsRouter.get('/search', (req, res) => {
     ...c,
     colors: c.colors ? JSON.parse(c.colors) : null,
     colorIdentity: c.colorIdentity ? JSON.parse(c.colorIdentity) : null,
-    imageUris: c.imageUris ? JSON.parse(c.imageUris) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
     prices: c.prices ? JSON.parse(c.prices) : null,
   }));
 
@@ -213,7 +214,7 @@ cardsRouter.get('/grouped', (req, res) => {
 
   const whereClause = conditions.length > 0 ? and(...conditions)! : undefined;
 
-  const countResult = db.select({ count: sql<number>`COUNT(DISTINCT name)` })
+  const countResult = catalogDb.select({ count: sql<number>`COUNT(DISTINCT name)` })
     .from(schema.scryfallCards)
     .where(whereClause)
     .get();
@@ -237,7 +238,7 @@ cardsRouter.get('/grouped', (req, res) => {
     ? sql`WHERE ${whereClause}`
     : sql``;
 
-  const rows = db.all<GroupedRow>(sql`
+  const rows = catalogDb.all<GroupedRow>(sql`
     WITH ranked AS (
       SELECT *,
         ROW_NUMBER() OVER (
@@ -282,8 +283,8 @@ cardsRouter.get('/grouped', (req, res) => {
   const parsed = rows.map(r => ({
     ...r,
     colors: r.colors ? JSON.parse(r.colors) : null,
-    imageUris: r.imageUris ? JSON.parse(r.imageUris) : null,
-    cardFaces: r.cardFaces ? JSON.parse(r.cardFaces) : null,
+    imageUris: localImageUris(r.id, r.imageUris),
+    cardFaces: localizeCardFaces(r.id, r.cardFaces),
   }));
 
   res.json({ data: parsed, total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
@@ -301,14 +302,14 @@ cardsRouter.get('/printings', (req, res) => {
     ...c,
     colors: c.colors ? JSON.parse(c.colors) : null,
     colorIdentity: c.colorIdentity ? JSON.parse(c.colorIdentity) : null,
-    imageUris: c.imageUris ? JSON.parse(c.imageUris) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
     prices: c.prices ? JSON.parse(c.prices) : null,
-    cardFaces: (c as any).cardFaces ? JSON.parse((c as any).cardFaces) : null,
+    cardFaces: localizeCardFaces(c.id, c.cardFaces),
   });
 
   if (page && pageSize) {
-    const total = db.select({ count: sql<number>`count(*)` }).from(schema.scryfallCards).where(baseWhere).get()?.count ?? 0;
-    const printings = db.select()
+    const total = catalogDb.select({ count: sql<number>`count(*)` }).from(schema.scryfallCards).where(baseWhere).get()?.count ?? 0;
+    const printings = catalogDb.select()
       .from(schema.scryfallCards)
       .where(baseWhere)
       .orderBy(desc(schema.scryfallCards.releasedAt))
@@ -318,7 +319,7 @@ cardsRouter.get('/printings', (req, res) => {
     return res.json({ data: printings.map(parseCard), total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
   }
 
-  const printings = db.select()
+  const printings = catalogDb.select()
     .from(schema.scryfallCards)
     .where(baseWhere)
     .orderBy(desc(schema.scryfallCards.releasedAt))
@@ -328,7 +329,7 @@ cardsRouter.get('/printings', (req, res) => {
 });
 
 cardsRouter.get('/sets', (_req, res) => {
-  const result = db.select({
+  const result = catalogDb.select({
     setCode: schema.sets.code,
     setName: schema.sets.name,
     hasBoosters: schema.sets.hasBoosters,
@@ -342,7 +343,7 @@ cardsRouter.get('/sets', (_req, res) => {
 });
 
 cardsRouter.get('/set/:setCode', (req, res) => {
-  const cards = db.select().from(schema.scryfallCards)
+  const cards = catalogDb.select().from(schema.scryfallCards)
     .where(and(NOT_ARENA, eq(schema.scryfallCards.setCode, req.params.setCode)))
     .orderBy(sql`CAST(REPLACE(REPLACE(collector_number, 'a', ''), 'b', '') AS INTEGER)`)
     .all();
@@ -351,28 +352,28 @@ cardsRouter.get('/set/:setCode', (req, res) => {
     ...c,
     colors: c.colors ? JSON.parse(c.colors) : null,
     colorIdentity: c.colorIdentity ? JSON.parse(c.colorIdentity) : null,
-    imageUris: c.imageUris ? JSON.parse(c.imageUris) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
     prices: c.prices ? JSON.parse(c.prices) : null,
     legalities: c.legalities ? JSON.parse(c.legalities) : null,
-    cardFaces: (c as any).cardFaces ? JSON.parse((c as any).cardFaces) : null,
-    finishes: (c as any).finishes ? JSON.parse((c as any).finishes) : null,
-    frameEffects: (c as any).frameEffects ? JSON.parse((c as any).frameEffects) : null,
+    cardFaces: localizeCardFaces(c.id, c.cardFaces),
+    finishes: c.finishes ? JSON.parse(c.finishes) : null,
+    frameEffects: c.frameEffects ? JSON.parse(c.frameEffects) : null,
   }));
 
   res.json(parsed);
 });
 
 cardsRouter.get('/:id', (req, res) => {
-  const card = db.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, req.params.id)).get();
+  const card = catalogDb.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, req.params.id)).get();
   if (!card) return res.status(404).json({ error: 'Card not found' });
 
   res.json({
     ...card,
     colors: card.colors ? JSON.parse(card.colors) : null,
     colorIdentity: card.colorIdentity ? JSON.parse(card.colorIdentity) : null,
-    imageUris: card.imageUris ? JSON.parse(card.imageUris) : null,
+    imageUris: localImageUris(card.id, card.imageUris),
     prices: card.prices ? JSON.parse(card.prices) : null,
     legalities: card.legalities ? JSON.parse(card.legalities) : null,
-    cardFaces: (card as any).cardFaces ? JSON.parse((card as any).cardFaces) : null,
+    cardFaces: localizeCardFaces(card.id, card.cardFaces),
   });
 });

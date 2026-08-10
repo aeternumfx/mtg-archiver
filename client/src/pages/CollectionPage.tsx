@@ -7,7 +7,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconTrash, IconArrowRight, IconSearch, IconPencil, IconFilter, IconMapPin, IconChevronUp, IconChevronDown } from '@tabler/icons-react';
-import { api } from '../api/client';
+import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { Location, LocationGroup, CollectionItem, Condition } from '../types';
 import { CardThumb, SetSymbol, Tags, ManaCost, GhostThumb } from '../components/CardDisplay';
@@ -17,6 +17,7 @@ import { WantlistFulfilActions } from '../components/WantlistFulfil';
 interface WantlistGhost {
   id: number; cardId: string | null; cardName: string; setCode: string | null;
   collectorNumber: string | null; destinationId: number | null;
+  tradeId?: number | null; notes?: string | null;
 }
 
 interface CollectionGroup {
@@ -118,6 +119,21 @@ const GhostRow = memo(function GhostRow({ w, locations, hasInternal, onDone, cur
   onDone: () => void;
   currentLocationId: number | null;
 }) {
+  if (w.tradeId) {
+    return (
+      <Group p="sm" gap="sm" wrap="nowrap" opacity={0.55} style={{ filter: 'grayscale(0.6)' }}>
+        <Box w={32} h={45}><GhostThumb name={w.cardName} cardId={w.cardId} /></Box>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" fw={500}>{w.cardName}</Text>
+          <Text size="xs" c="dimmed">{w.notes || 'Pending trade'}</Text>
+        </div>
+        <Badge size="xs" variant="light" color="orange">Pending trade</Badge>
+        <Button size="compact-xs" variant="light" color="orange" component="a" href={`/trades?trade=${w.tradeId}`}>
+          View trade
+        </Button>
+      </Group>
+    );
+  }
   return (
     <Group p="sm" gap="sm" wrap="nowrap" opacity={0.55} style={{ filter: 'grayscale(0.6)' }}>
       <Box w={32} h={45}><GhostThumb name={w.cardName} cardId={w.cardId} /></Box>
@@ -199,6 +215,7 @@ export default function CollectionPage() {
           sort,
           order,
           filters,
+          tradeGhosts: '1',
         }),
         api.collection.names().catch(() => []),
         api.collectionGoals.list().catch(() => []),
@@ -233,7 +250,7 @@ export default function CollectionPage() {
       params.set('order', order);
       params.set('page', String(page));
       params.set('pageSize', '50');
-      const res = await fetch(`/api/collection/grouped?${params}`);
+      const res = await authFetch(`/api/collection/grouped?${params}`);
       const data = await res.json();
       setGroups(data.groups || []);
       setTotalPages(data.totalPages || 1);
@@ -527,7 +544,7 @@ export default function CollectionPage() {
 
   return (
     <>
-      <Group mb="md" justify="space-between">
+      <Group mb="md" justify="space-between" data-tour="collection-header">
         <Title order={2}>Collection</Title>
         <Group>
           <Select

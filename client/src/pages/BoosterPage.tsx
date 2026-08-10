@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   Title, Group, Text, Badge, Card, Select, TextInput, Button, NumberInput,
-  LoadingOverlay, Box, Paper, SimpleGrid, Modal, ScrollArea,
+  LoadingOverlay, Box, Paper, SimpleGrid, Modal, ScrollArea, Alert,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconSearch, IconPlus, IconCheck, IconFlame, IconHistory, IconPackages, IconCards } from '@tabler/icons-react';
+import { IconSearch, IconPlus, IconCheck, IconFlame, IconHistory, IconPackages, IconCards, IconAlertTriangle } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { ScryfallCard, Location } from '../types';
 import { CardThumb, SetSymbol } from '../components/CardDisplay';
@@ -209,6 +209,10 @@ export default function BoosterPage() {
 
   return (
     <>
+      <Alert icon={<IconAlertTriangle size={18} />} color="yellow" variant="filled" mb="md" px="lg" py="sm"
+        styles={{ message: { fontSize: 15, fontWeight: 600, textAlign: 'center' } }}>
+        This is a beta feature and may currently have some bugs. We do not recommend using these features yet.
+      </Alert>
       <Group mb="md" justify="space-between">
         <Title order={2}>Booster Opener</Title>
         <Button variant="light" leftSection={<IconHistory size={16} />} onClick={() => setShowHistory(!showHistory)}>
@@ -253,6 +257,7 @@ export default function BoosterPage() {
               value={setCode}
               onChange={v => { setSetCode(v); setShowHistory(false); }}
               searchable w={350} size="sm"
+              data-tour="booster-set"
             />
             <Select
               label="Booster Type"

@@ -1,6 +1,8 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq, desc, sql } from 'drizzle-orm';
+import { cardsByIds, parseCardJson } from '../services/cards';
 
 export const organizeRouter = Router();
 
@@ -8,26 +10,20 @@ organizeRouter.get('/pending', (_req, res) => {
   const items = sqlite.prepare(`
     SELECT ci.id, ci.card_id as cardId, ci.location_id as locationId,
       ci.destination_id as destinationId, ci.quantity,
-      sc.id as cardId2, sc.name, sc.set_name as setName, sc.set_code as setCode,
-      sc.collector_number as collectorNumber, sc.image_uris as imageUris, sc.prices,
       src_loc.name as sourceName, dst_loc.name as destName
     FROM collection_items ci
-    JOIN scryfall_cards sc ON sc.id = ci.card_id
     JOIN locations src_loc ON src_loc.id = ci.location_id
     JOIN locations dst_loc ON dst_loc.id = ci.destination_id
     WHERE ci.destination_id IS NOT NULL AND ci.destination_id != ci.location_id
     ORDER BY ci.created_at DESC
   `).all() as any[];
 
+  const cards = cardsByIds(items.map(i => i.cardId));
+
   const parsed = items.map(i => ({
     id: i.id, cardId: i.cardId, locationId: i.locationId,
     destinationId: i.destinationId, quantity: i.quantity,
-    card: {
-      id: i.cardId2, name: i.name, setName: i.setName, setCode: i.setCode,
-      collectorNumber: i.collectorNumber,
-      imageUris: i.imageUris ? JSON.parse(i.imageUris) : null,
-      prices: i.prices ? JSON.parse(i.prices) : null,
-    },
+    card: i.cardId && cards.get(i.cardId) ? parseCardJson(cards.get(i.cardId)!) : null,
     sourceLoc: { id: i.locationId, name: i.sourceName },
     destLoc: { id: i.destinationId, name: i.destName },
   }));
@@ -69,7 +65,7 @@ organizeRouter.post('/resolve', (req, res) => {
 
     res.json({ message: 'Movements resolved', undo: history });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -86,7 +82,7 @@ organizeRouter.post('/undo-resolve', (req, res) => {
     })();
     res.json({ message: 'Undone' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -109,6 +105,6 @@ organizeRouter.post('/history/undo', (req, res) => {
     })();
     res.json({ message: 'Marked as undone' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });

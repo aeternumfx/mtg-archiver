@@ -1,7 +1,7 @@
 @keyframes pageFadeIn {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    opacity: 0.55;
+    transform: translateY(3px);
   }
   to {
     opacity: 1;
@@ -10,7 +10,16 @@
 }
 
 .page-enter {
-  animation: pageFadeIn 0.25s ease-out;
+  animation: pageFadeIn 0.2s ease-out;
+}
+
+@keyframes tourPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 3px #fcc419, 0 0 16px 5px rgba(252, 196, 25, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 0 3px #fcc419, 0 0 30px 12px rgba(252, 196, 25, 0.9);
+  }
 }
 
 body {

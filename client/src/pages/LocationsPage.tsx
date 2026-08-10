@@ -324,7 +324,7 @@ export default function LocationsPage() {
         </Group>
       </Group>
 
-      <Stack gap={0}>
+      <Stack gap={0} data-tour="locations-list">
         {inboxLoc && <LocationCard loc={inboxLoc} />}
 
         {groups.map(group => {

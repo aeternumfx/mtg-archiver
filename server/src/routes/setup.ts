@@ -1,29 +1,34 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
-import { sqlite } from '../db';
+import { catalogSqlite, getSessionContext } from '../db';
 import { resetToSetup } from './data';
 
 export const setupRouter = Router();
 
+const key = (k: string, uid: number | undefined) => `${k}:${uid ?? 'anon'}`;
+
 setupRouter.get('/', (_req, res) => {
-  const mode = (sqlite.prepare("SELECT value FROM sync_meta WHERE key = 'setup_mode'").get() as { value: string } | undefined)?.value ?? null;
-  const done = ((sqlite.prepare("SELECT value FROM sync_meta WHERE key = 'setup_done'").get() as { value: string } | undefined)?.value ?? '0') === '1';
+  const uid = getSessionContext()?.userId;
+  const mode = (catalogSqlite.prepare("SELECT value FROM sync_meta WHERE key = ?").get(key('setup_mode', uid)) as { value: string } | undefined)?.value ?? null;
+  const done = ((catalogSqlite.prepare("SELECT value FROM sync_meta WHERE key = ?").get(key('setup_done', uid)) as { value: string } | undefined)?.value ?? '0') === '1';
   res.json({ mode, done });
 });
 
 setupRouter.post('/', (req, res) => {
   const { mode, done } = req.body;
+  const uid = getSessionContext()?.userId;
   try {
-    if (mode === 'demo' || mode === 'recommended') {
+    if (mode === 'recommended') {
       resetToSetup(mode);
     }
     if (mode) {
-      sqlite.prepare('INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)').run('setup_mode', mode);
+      catalogSqlite.prepare('INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)').run(key('setup_mode', uid), mode);
     }
     if (done !== undefined) {
-      sqlite.prepare('INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)').run('setup_done', done ? '1' : '0');
+      catalogSqlite.prepare('INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)').run(key('setup_done', uid), done ? '1' : '0');
     }
     res.json({ ok: true, mode: mode ?? null, done: done ?? false });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });

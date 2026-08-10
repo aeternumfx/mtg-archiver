@@ -1,14 +1,16 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq, and, or, like, asc, desc, sql } from 'drizzle-orm';
+import { cardsByIds, cardById, parseCardJson } from '../services/cards';
 
 export const collectionRouter = Router();
 
 collectionRouter.get('/names', (_req, res) => {
-  const rows = sqlite.prepare(
-    'SELECT DISTINCT sc.name FROM collection_items ci JOIN scryfall_cards sc ON sc.id = ci.card_id ORDER BY sc.name'
-  ).all() as Array<{ name: string }>;
-  res.json(rows.map(r => r.name));
+  const rows = sqlite.prepare('SELECT DISTINCT card_id FROM collection_items').all() as Array<{ card_id: string }>;
+  const cards = cardsByIds(rows.map(r => r.card_id));
+  const names = [...new Set(rows.map(r => cards.get(r.card_id)?.name).filter(Boolean) as string[])].sort();
+  res.json(names);
 });
 
 collectionRouter.get('/', (req, res) => {
@@ -36,35 +38,19 @@ collectionRouter.get('/', (req, res) => {
     notes: schema.collectionItems.notes,
     acquiredAt: schema.collectionItems.acquiredAt,
     createdAt: schema.collectionItems.createdAt,
-    card: {
-      id: schema.scryfallCards.id,
-      name: schema.scryfallCards.name,
-      setName: schema.scryfallCards.setName,
-      setCode: schema.scryfallCards.setCode,
-      collectorNumber: schema.scryfallCards.collectorNumber,
-      rarity: schema.scryfallCards.rarity,
-      manaCost: schema.scryfallCards.manaCost,
-      cmc: schema.scryfallCards.cmc,
-      typeLine: schema.scryfallCards.typeLine,
-      imageUris: schema.scryfallCards.imageUris,
-      prices: schema.scryfallCards.prices,
-    },
   })
     .from(schema.collectionItems)
     .where(where)
-    .innerJoin(schema.scryfallCards, eq(schema.collectionItems.cardId, schema.scryfallCards.id))
-    .orderBy(schema.scryfallCards.name)
+    .orderBy(schema.collectionItems.createdAt)
     .limit(pageSize)
     .offset(offset)
     .all();
 
+  const cards = cardsByIds(items.map(i => i.cardId));
+
   const parsed = items.map(i => ({
     ...i,
-    card: {
-      ...i.card,
-      imageUris: i.card.imageUris ? JSON.parse(i.card.imageUris) : null,
-      prices: i.card.prices ? JSON.parse(i.card.prices) : null,
-    },
+    card: i.cardId && cards.get(i.cardId) ? parseCardJson(cards.get(i.cardId)!) : null,
   }));
 
   res.json({ data: parsed, total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
@@ -77,7 +63,7 @@ collectionRouter.post('/', (req, res) => {
     return res.status(400).json({ error: 'cardId and locationId are required' });
   }
 
-  const card = db.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, cardId)).get();
+  const card = cardById(cardId);
   if (!card) return res.status(404).json({ error: 'Card not found' });
 
   const loc = db.select().from(schema.locations).where(eq(schema.locations.id, locationId)).get();
@@ -124,7 +110,7 @@ collectionRouter.post('/', (req, res) => {
     .values({ cardId, locationId, destinationId: destinationId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, notes: notes ?? null, acquiredAt })
     .returning().get();
 
-  const foundCard = db.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, cardId)).get();
+  const foundCard = cardById(cardId);
   db.insert(schema.movementHistory).values({
     itemId: item.id, cardId, cardName: foundCard?.name || '', action: 'added',
     toLocationId: locationId, quantity,
@@ -168,7 +154,7 @@ collectionRouter.patch('/:id', (req, res) => {
 
   let movedHistoryId: number | null = null;
   if (locationId !== undefined && locationId !== item.locationId) {
-    const card = db.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, item.cardId)).get();
+    const card = cardById(item.cardId);
     const entry = db.insert(schema.movementHistory).values({
       itemId: id, cardId: item.cardId, cardName: card?.name || '', action: 'moved',
       fromLocationId: item.locationId, toLocationId: locationId, quantity: item.quantity,
@@ -234,7 +220,7 @@ collectionRouter.post('/:id/split-copy', (req, res) => {
 
     res.status(201).json(newItem);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -345,10 +331,9 @@ collectionRouter.get('/grouped', (req, res) => {
     return cond ? (rank[cond] ?? 99) : 99;
   };
 
-  let whereConditions: any[] = [];
+  let sqlWhere = '';
   const queryParams: any[] = [];
   let joins = '';
-  let sqlWhere = '';
   if (locationId) {
     queryParams.push(locationId);
     sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} ci.location_id = ?`;
@@ -367,40 +352,6 @@ collectionRouter.get('/grouped', (req, res) => {
     joins += ' JOIN locations loc ON loc.id = ci.location_id';
     sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} loc.group_id IS NULL`;
   }
-  if (q) {
-    const pattern = `%${q.replace(/['"]/g, '')}%`;
-    queryParams.push(pattern);
-    sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} sc.name LIKE ?`;
-  }
-
-  const colorKeys = Object.keys(req.query).filter(k => k.startsWith('c_'));
-  for (const key of colorKeys) {
-    const color = key.slice(2).toUpperCase();
-    const val = req.query[key] as string;
-    if (val === 'include') {
-      sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} (sc.color_identity IS NOT NULL AND sc.color_identity LIKE ?)`;
-      queryParams.push(`%"${color}"%`);
-    } else if (val === 'exclude') {
-      sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} (sc.color_identity IS NULL OR sc.color_identity NOT LIKE ?)`;
-      queryParams.push(`%"${color}"%`);
-    }
-  }
-
-  if (rarityFilter) {
-    const rarities = rarityFilter.split(',').filter(Boolean);
-    if (rarities.length > 0) {
-      sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} sc.rarity IN (${rarities.map(() => '?').join(',')})`;
-      queryParams.push(...rarities);
-    }
-  }
-
-  if (typeFilter) {
-    const types = typeFilter.split(',').filter(Boolean);
-    if (types.length > 0) {
-      sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} (${types.map(t => 'sc.type_line LIKE ?').join(' OR ')})`;
-      queryParams.push(...types.map(t => `%${t}%`));
-    }
-  }
 
   if (conditionFilter) {
     const conds = conditionFilter.split(',').filter(Boolean);
@@ -415,15 +366,6 @@ collectionRouter.get('/grouped', (req, res) => {
     queryParams.push(foilFilter);
   }
 
-  if (cmcMin !== undefined) {
-    sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} sc.cmc >= ?`;
-    queryParams.push(cmcMin);
-  }
-  if (cmcMax !== undefined) {
-    sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} sc.cmc <= ?`;
-    queryParams.push(cmcMax);
-  }
-
   if (valueMin !== undefined) {
     sqlWhere += `${sqlWhere ? ' AND ' : 'WHERE '} (ci.quantity * ci.purchase_price) >= ?`;
     queryParams.push(valueMin);
@@ -433,81 +375,80 @@ collectionRouter.get('/grouped', (req, res) => {
     queryParams.push(valueMax);
   }
 
-  const stmt = sqlite.prepare(`
-    SELECT
-      ci.card_id as cardId,
-      sc.name as c_name,
-      sc.type_line as typeLine,
-      sc.mana_cost as manaCost,
-      sc.image_uris as imageUris,
-      sc.set_name as setName,
-      sc.set_code as setCode,
-      sc.collector_number as collectorNumber,
-      sc.rarity as rarity,
-      COALESCE(SUM(ci.quantity), 0) as sum_qty,
-      COALESCE(SUM(ci.quantity * ci.purchase_price), 0) as sum_price,
-      MAX(ci.foil) as has_foil,
-      sc.prices as prices,
-      sc.cmc
-    FROM collection_items ci
-    ${joins}
-    JOIN scryfall_cards sc ON sc.id = ci.card_id
-    ${sqlWhere}
-    GROUP BY ci.card_id
-    ORDER BY c_name
-  `);
+  const nameTokens = q ? q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean) : [];
+
+  const colorInclude: string[] = [];
+  const colorExclude: string[] = [];
+  for (const key of Object.keys(req.query)) {
+    if (key.startsWith('c_') && req.query[key] === 'include') colorInclude.push(key.slice(2).toUpperCase());
+    if (key.startsWith('c_') && req.query[key] === 'exclude') colorExclude.push(key.slice(2).toUpperCase());
+  }
+
+  const rarityList = rarityFilter.split(',').filter(Boolean);
+  const typeList = typeFilter.split(',').filter(Boolean);
 
   const itemsStmt = sqlite.prepare(`
     SELECT
       ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
       ci.foil, ci.condition, ci.quantity,
       ci.purchase_price as purchasePrice, ci.price_autofilled as priceAutofilled,
-      ci.pack_opened as packOpened, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt,
-      sc.name, sc.set_name as setName, sc.set_code as setCode,
-      sc.collector_number as collectorNumber, sc.rarity, sc.mana_cost as manaCost,
-      sc.cmc, sc.type_line as typeLine, sc.image_uris as imageUris,
-      sc.prices
+      ci.pack_opened as packOpened, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt
     FROM collection_items ci
     ${joins}
-    JOIN scryfall_cards sc ON sc.id = ci.card_id
     ${sqlWhere}
-    ORDER BY sc.name
   `);
 
   const rawItems = itemsStmt.all(...queryParams) as any[];
+  const cards = cardsByIds(rawItems.map(i => i.cardId));
 
-  const parsedItems = rawItems.map((i: any) => ({
-    id: i.id,
-    cardId: i.cardId,
-    locationId: i.locationId,
-    destinationId: i.destinationId,
-    foil: i.foil,
-    condition: i.condition,
-    quantity: i.quantity,
-    purchasePrice: i.purchasePrice,
-    priceAutofilled: i.priceAutofilled,
-    packOpened: i.packOpened,
-    notes: i.notes,
-    acquiredAt: i.acquiredAt,
-    createdAt: i.createdAt,
-    card: {
-      id: i.cardId,
-      name: i.name,
-      setName: i.setName,
-      setCode: i.setCode,
-      collectorNumber: i.collectorNumber,
-      rarity: i.rarity,
-      manaCost: i.manaCost,
-      cmc: i.cmc,
-      typeLine: i.typeLine,
-      imageUris: i.imageUris ? JSON.parse(i.imageUris) : null,
-      prices: i.prices ? JSON.parse(i.prices) : null,
-    },
-  }));
+  const matchesCard = (card: any): boolean => {
+    if (!card) return false;
+    if (nameTokens.length > 0) {
+      const n = card.name.toLowerCase();
+      if (!nameTokens.every(t => n.includes(t.toLowerCase()))) return false;
+    }
+    let identity: string[] = [];
+    if (card.colorIdentity) {
+      try { identity = JSON.parse(card.colorIdentity); } catch { identity = []; }
+    }
+    for (const c of colorInclude) if (!identity.includes(c)) return false;
+    for (const c of colorExclude) if (identity.includes(c)) return false;
+    if (rarityList.length > 0 && !rarityList.includes(card.rarity)) return false;
+    if (typeList.length > 0) {
+      const tl = card.typeLine || '';
+      if (!typeList.some(t => tl.toLowerCase().includes(t.toLowerCase()))) return false;
+    }
+    if (cmcMin !== undefined && !isNaN(cmcMin) && (card.cmc ?? 0) < cmcMin) return false;
+    if (cmcMax !== undefined && !isNaN(cmcMax) && (card.cmc ?? 0) > cmcMax) return false;
+    return true;
+  };
+
+  const parsedItems: any[] = [];
+  for (const i of rawItems) {
+    const card = i.cardId ? cards.get(i.cardId) : undefined;
+    if (!matchesCard(card)) continue;
+    parsedItems.push({
+      id: i.id,
+      cardId: i.cardId,
+      locationId: i.locationId,
+      destinationId: i.destinationId,
+      foil: i.foil,
+      condition: i.condition,
+      quantity: i.quantity,
+      purchasePrice: i.purchasePrice,
+      priceAutofilled: i.priceAutofilled,
+      packOpened: i.packOpened,
+      notes: i.notes,
+      acquiredAt: i.acquiredAt,
+      createdAt: i.createdAt,
+      card: card ? parseCardJson(card) : null,
+    });
+  }
 
   const groupsMap: Record<string, typeof parsedItems> = {};
   for (const item of parsedItems) {
-    const key = item.card.name;
+    const key = item.card?.name;
+    if (!key) continue;
     if (!groupsMap[key]) groupsMap[key] = [];
     groupsMap[key].push(item);
   }

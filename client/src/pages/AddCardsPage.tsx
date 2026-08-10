@@ -735,6 +735,7 @@ export default function AddCardsPage() {
         onKeyDown={handleKeyDown}
         leftSection={<IconSearch size={16} />}
         ref={searchRef}
+        data-tour="add-search"
       />
 
       <Group mb="sm" gap="xs">

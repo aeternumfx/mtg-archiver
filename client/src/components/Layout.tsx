@@ -1,24 +1,38 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import {
-  AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon,
+  AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon, Menu, Avatar,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar } from '@tabler/icons-react';
+import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar, IconShieldLock, IconLogout, IconUser, IconChartBar, IconUsers, IconAdjustments, IconMessageCircle, IconEye, IconInfoCircle, IconRocket } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import SyncBanner from './SyncBanner';
+import SetupGuide from './SetupGuide';
+import AdminSetupWizard from './AdminSetupWizard';
+import AdminUpdateBanner from './AdminUpdateBanner';
+import ModeratorBell from './ModeratorBell';
+import { RequestModal } from './RequestModal';
+import { authFetch } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import type { SyncStatus } from '../types';
-import { IS_DEMO } from '../config';
 
-const navItems: Array<{ label: string; path: string; icon: any; badge?: string }> = [
-  { label: 'Dashboard', path: '/', icon: IconHome },
-  { label: 'Organize', path: '/organize', icon: IconSortDescending },
-  { label: 'Add Cards', path: '/add', icon: IconPlus },
-  { label: 'Locations', path: '/locations', icon: IconPackages },
-  { label: 'Collection', path: '/collection', icon: IconArchive },
-  { label: 'Decks', path: '/decks', icon: IconStack },
-  { label: 'Trades', path: '/trades', icon: IconArrowsLeftRight, badge: 'Beta' },
-  { label: 'Boosters', path: '/booster', icon: IconGift, badge: 'Beta' },
-  { label: 'Wantlist', path: '/wantlist', icon: IconHeart },
+const navItems: Array<{ label: string; path: string; icon: any; badge?: string; tour: string }> = [
+  { label: 'Dashboard', path: '/dashboard', icon: IconHome, tour: 'nav-dashboard' },
+  { label: 'Organize', path: '/organize', icon: IconSortDescending, tour: 'nav-organize' },
+  { label: 'Add Cards', path: '/add', icon: IconPlus, tour: 'nav-add' },
+  { label: 'Locations', path: '/locations', icon: IconPackages, tour: 'nav-locations' },
+  { label: 'Collection', path: '/collection', icon: IconArchive, tour: 'nav-collection' },
+  { label: 'Decks', path: '/decks', icon: IconStack, tour: 'nav-decks' },
+  { label: 'Trades', path: '/trades', icon: IconArrowsLeftRight, badge: 'Beta', tour: 'nav-trades' },
+  { label: 'Boosters', path: '/booster', icon: IconGift, badge: 'Beta', tour: 'nav-booster' },
+  { label: 'Wantlist', path: '/wantlist', icon: IconHeart, tour: 'nav-wantlist' },
+];
+
+const adminNavItems: Array<{ label: string; path: string; icon: any; badge?: string; tour: string }> = [
+  { label: 'Admin Dashboard', path: '/admin', icon: IconChartBar, tour: 'admin-dashboard' },
+  { label: 'Users', path: '/admin/users', icon: IconUsers, tour: 'admin-users' },
+  { label: 'User Requests', path: '/admin/requests', icon: IconMessageCircle, tour: 'admin-requests' },
+  { label: 'System Settings', path: '/admin/settings', icon: IconAdjustments, tour: 'admin-settings' },
+  { label: 'Updates & Backup', path: '/admin/updates', icon: IconRocket, tour: 'admin-updates' },
 ];
 
 function syncAge(lastSync: string | null): { label: string; color: string; hours: number | null } {
@@ -31,10 +45,13 @@ function syncAge(lastSync: string | null): { label: string; color: string; hours
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [opened, { toggle }] = useDisclosure();
-  const [syncOpened, { open: openSync, close: closeSync }] = useDisclosure(false);
   const [currencyOpened, { open: openCurrency, close: closeCurrency }] = useDisclosure(false);
+  const [requestOpened, { open: openRequest, close: closeRequest }] = useDisclosure(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const { user, logout, exitImpersonation } = useAuth();
+  const isAdmin = user?.role === 'admin';
+  const items = isAdmin ? adminNavItems : navItems;
   const [syncStatus, setSyncStatus] = useState<SyncStatus>({ syncing: false, lastSync: null, progress: null, stage: null });
 
   useEffect(() => {
@@ -43,7 +60,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
     const poll = async () => {
       try {
-        const s = await (await fetch('/api/sync-status')).json();
+        const res = await authFetch('/api/sync-status');
+        if (!res.ok) { if (mounted) timeout = setTimeout(poll, 10000); return; }
+        const s = await res.json();
         if (!mounted) return;
         setSyncStatus(s);
         timeout = setTimeout(poll, s.syncing ? 3000 : 30000);
@@ -55,21 +74,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     poll();
     return () => { mounted = false; clearTimeout(timeout); };
   }, []);
-
-  const handleResync = useCallback(async () => {
-    closeSync();
-    setSyncStatus(prev => ({ ...prev, syncing: true, progress: 0, stage: 'Starting sync...' }));
-    try {
-      const res = await fetch('/api/sync', { method: 'POST' });
-      if (!res.ok) {
-        const err = await res.json();
-        setSyncStatus(prev => ({ ...prev, syncing: false, progress: null, stage: null }));
-        throw new Error(err.error);
-      }
-    } catch (err: any) {
-      setSyncStatus(prev => ({ ...prev, syncing: false, progress: null, stage: null }));
-    }
-  }, [closeSync]);
 
   const age = syncAge(syncStatus.lastSync);
   const ago = syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString() : 'never';
@@ -86,21 +90,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <IconCards size={26} />
             <Title order={3}>MTG Archiver</Title>
-            {IS_DEMO && (
-              <Badge
-                variant="filled"
-                color="orange"
-                size="lg"
-                radius="sm"
-                styles={{ root: { fontSize: 14, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', boxShadow: '0 0 12px rgba(255,140,0,0.5)' } }}
-              >
-                DEMO INSTANCE
+            {import.meta.env.DEV && (
+              <Badge size="sm" variant="filled" color="lime" radius="sm" tt="uppercase" style={{ fontWeight: 700 }}>
+                DEV
               </Badge>
             )}
           </Group>
           <Group gap="xs">
-            <Tooltip label={`Last sync: ${ago}. Click to resync.`}>
-              <Group gap={4} style={{ cursor: 'pointer' }} onClick={!syncStatus.syncing ? openSync : undefined}>
+            <Tooltip label={`Card data last synced: ${ago}`}>
+              <Group gap={4} style={{ cursor: 'default' }}>
                 <IconRefresh size={14} style={{ opacity: 0.5 }} />
                 <Badge
                   size="sm"
@@ -112,15 +110,49 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 </Badge>
               </Group>
             </Tooltip>
-            <Tooltip label="Prices shown in USD">
-              <Badge size="sm" variant="light" color="gray" leftSection={<IconCurrencyDollar size={12} />}
-                style={{ cursor: 'pointer' }} onClick={openCurrency}>
-                USD
-              </Badge>
+            {user?.role === 'moderator' && <ModeratorBell />}
+            <Tooltip label="Submit a request to the admin">
+              <ActionIcon variant="subtle" size="sm" onClick={openRequest} data-tour="request-button">
+                <IconMessageCircle size={18} />
+              </ActionIcon>
             </Tooltip>
-            <ActionIcon variant="subtle" size="sm" onClick={() => navigate('/settings')}>
-              <IconSettings size={18} />
-            </ActionIcon>
+            {!isAdmin && (
+              <Tooltip label="Prices shown in USD">
+                <Badge size="sm" variant="light" color="gray" leftSection={<IconCurrencyDollar size={12} />}
+                  style={{ cursor: 'pointer' }} onClick={openCurrency}>
+                  USD
+                </Badge>
+              </Tooltip>
+            )}
+            {!isAdmin && (
+              <ActionIcon variant="subtle" size="sm" onClick={() => navigate('/settings')} data-tour="settings-button">
+                <IconSettings size={18} />
+              </ActionIcon>
+            )}
+            <Menu shadow="md" width={200} position="bottom-end">
+              <Menu.Target>
+                <ActionIcon variant="light" radius="xl" size="md" style={{ cursor: 'pointer' }}>
+                  <Avatar radius="xl" size={26} color="blue">{user?.username?.[0]?.toUpperCase() ?? '?'}</Avatar>
+                </ActionIcon>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Label>
+                  <Group gap={6}>
+                    <IconUser size={14} />
+                    <span>{user?.username}</span>
+                    {isAdmin && <Badge size="xs" color="grape" variant="light">Admin</Badge>}
+                  </Group>
+                </Menu.Label>
+                {isAdmin && (
+                  <Menu.Item leftSection={<IconShieldLock size={16} />} onClick={() => navigate('/admin')}>
+                    Admin
+                  </Menu.Item>
+                )}
+                <Menu.Item leftSection={<IconLogout size={16} />} color="red" onClick={logout}>
+                  Sign out
+                </Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
           </Group>
         </Group>
       </AppShell.Header>
@@ -129,7 +161,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <Group gap="xs" px="xs" pb="sm" mb="xs">
           <Text size="lg" fw={700} style={{ letterSpacing: '-0.02em' }}>Menu</Text>
         </Group>
-        {navItems.map(item => (
+        {items.map(item => (
           <NavLink
             key={item.path}
             label={item.label}
@@ -139,30 +171,39 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             onClick={() => { navigate(item.path); toggle(); }}
             variant="light"
             mb={4}
+            data-tour={item.tour}
           />
         ))}
       </AppShell.Navbar>
 
       <AppShell.Main>
+        {isAdmin && <AdminUpdateBanner />}
+        {user?.isDemo && (
+          <Group px="md" py={10} mb="md" justify="center" wrap="wrap" gap={8}
+            style={{ background: 'var(--mantine-color-orange-6)', borderRadius: 8, textAlign: 'center' }}>
+            <IconInfoCircle size={20} color="#fff" style={{ flexShrink: 0 }} />
+            <Text size="md" fw={700} c="white">
+              DEMO USER — you're browsing the shared demo account. Anything you add or change is visible to everyone.
+            </Text>
+          </Group>
+        )}
+        {user?.impersonating && (
+          <Group pos="sticky" top={0} px="md" py={6} mb="sm" justify="space-between" wrap="nowrap"
+            style={{ background: 'var(--mantine-color-red-9)', borderRadius: 8, zIndex: 100 }}>
+            <Group gap={6} wrap="nowrap">
+              <IconEye size={16} color="#fff" />
+              <Text size="sm" fw={600} c="white">
+                Viewing as <b>{user.username}</b> — admin preview. Changes are made to this user's account.
+              </Text>
+            </Group>
+            <Button size="compact-xs" variant="white" color="red" onClick={exitImpersonation}>Exit preview</Button>
+          </Group>
+        )}
         <SyncBanner syncStatus={syncStatus} />
         <div key={location.pathname} className="page-enter">
           {children}
         </div>
       </AppShell.Main>
-
-      <Modal opened={syncOpened} onClose={closeSync} title="Resync from Scryfall" size="sm">
-        <Text size="sm" mb="md">
-          Last sync was <b>{ago}</b>.
-        </Text>
-        <Text size="sm" mb="md" c="dimmed">
-          We don't recommend syncing more than once per day. The Scryfall bulk data file
-          is 532MB and frequent downloads may trigger rate limiting.
-        </Text>
-        <Group justify="flex-end">
-          <Button variant="default" onClick={closeSync}>Cancel</Button>
-          <Button color="blue" onClick={handleResync}>Sync Now</Button>
-        </Group>
-      </Modal>
 
       <Modal opened={currencyOpened} onClose={closeCurrency} title="Currency" size="sm">
         <Text size="sm" mb="md">
@@ -175,8 +216,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <Button variant="default" onClick={closeCurrency}>Close</Button>
         </Group>
       </Modal>
+
+      {!isAdmin && !user?.impersonating && <SetupGuide />}
+      {isAdmin && <AdminSetupWizard />}
+
+      <RequestModal opened={requestOpened} onClose={closeRequest} />
     </AppShell>
   );
 }
-
-

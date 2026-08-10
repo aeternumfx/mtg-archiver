@@ -1,6 +1,8 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq, and, sql } from 'drizzle-orm';
+import { cardById, cardsByIds, parseCardJson } from '../services/cards';
 
 export const decksRouter = Router();
 
@@ -73,7 +75,7 @@ decksRouter.post('/', (req, res) => {
     })();
     res.status(201).json({ ...deck, cardCount: 0, locationId: loc?.id ?? null });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -123,7 +125,7 @@ decksRouter.put('/:id', (req, res) => {
     const loc = getDeckLocation(id);
     res.json({ ...deck, locationId: loc?.id ?? null });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -152,7 +154,7 @@ decksRouter.delete('/:id', (req, res) => {
     })();
     res.status(204).end();
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -171,40 +173,20 @@ decksRouter.get('/:id/cards', (req, res) => {
     notes: schema.collectionItems.notes,
     acquiredAt: schema.collectionItems.acquiredAt,
     createdAt: schema.collectionItems.createdAt,
-    card: {
-      id: schema.scryfallCards.id,
-      name: schema.scryfallCards.name,
-      setName: schema.scryfallCards.setName,
-      setCode: schema.scryfallCards.setCode,
-      collectorNumber: schema.scryfallCards.collectorNumber,
-      rarity: schema.scryfallCards.rarity,
-      manaCost: schema.scryfallCards.manaCost,
-      cmc: schema.scryfallCards.cmc,
-      typeLine: schema.scryfallCards.typeLine,
-      colorIdentity: schema.scryfallCards.colorIdentity,
-      legalities: schema.scryfallCards.legalities,
-      cardFaces: schema.scryfallCards.cardFaces,
-      imageUris: schema.scryfallCards.imageUris,
-      prices: schema.scryfallCards.prices,
-    },
   })
     .from(schema.collectionItems)
     .where(eq(schema.collectionItems.deckId, deckId))
-    .innerJoin(schema.scryfallCards, eq(schema.collectionItems.cardId, schema.scryfallCards.id))
-    .orderBy(schema.scryfallCards.name)
     .all();
 
-  const parsed = items.map(i => ({
-    ...i,
-    card: {
-      ...i.card,
-      colorIdentity: i.card.colorIdentity ? JSON.parse(i.card.colorIdentity) : null,
-      legalities: (i.card as any).legalities ? JSON.parse((i.card as any).legalities) : null,
-      cardFaces: (i.card as any).cardFaces ? JSON.parse((i.card as any).cardFaces) : null,
-      imageUris: i.card.imageUris ? JSON.parse(i.card.imageUris) : null,
-      prices: i.card.prices ? JSON.parse(i.card.prices) : null,
-    },
-  }));
+  const cards = cardsByIds(items.map(i => i.cardId));
+
+  const parsed = items
+    .map(i => ({
+      ...i,
+      card: i.cardId && cards.get(i.cardId) ? parseCardJson(cards.get(i.cardId)!) : null,
+    }))
+    .filter(i => i.card)
+    .sort((a, b) => ((a.card as any).name || '').localeCompare((b.card as any).name || ''));
 
   res.json(parsed);
 });
@@ -234,7 +216,7 @@ decksRouter.post('/:id/cards', (req, res) => {
 
     res.status(201).json(item);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -247,7 +229,7 @@ decksRouter.delete('/:id/cards/:itemId', (req, res) => {
       .run();
     res.status(204).end();
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -266,7 +248,7 @@ decksRouter.post('/:id/link', (req, res) => {
       .run();
     res.json({ message: 'Card added to deck from collection' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -288,7 +270,7 @@ decksRouter.post('/:id/required', (req, res) => {
       .returning().get();
     res.status(201).json(card);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -304,7 +286,7 @@ decksRouter.delete('/:id/required/:reqId', (req, res) => {
     })();
     res.status(204).end();
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -320,7 +302,7 @@ decksRouter.patch('/:id/required/:reqId', (req, res) => {
     if (!updated) return res.status(404).json({ error: 'Required card not found' });
     res.json(updated);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -355,7 +337,7 @@ decksRouter.post('/:id/required/:reqId/fill', (req, res) => {
 
     res.json({ message: 'Card added to deck from collection' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -407,7 +389,7 @@ decksRouter.post('/:id/required/:reqId/move', (req, res) => {
 
     res.status(400).json({ error: 'destinationType must be "location" or "deck"' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -439,21 +421,34 @@ decksRouter.get('/:id/legality', (req, res) => {
     return res.json({ format, legal: true, totalCards, issues: [], cardStatuses: [] });
   }
 
-  const items = sqlite.prepare(`
-    SELECT ci.quantity, sc.id as cardId, sc.name, sc.type_line as typeLine,
-      sc.legalities, sc.color_identity as colorIdentity, sc.oracle_text as oracleText
-    FROM collection_items ci
-    JOIN scryfall_cards sc ON sc.id = ci.card_id
-    WHERE ci.deck_id = ?
-  `).all(deckId) as any[];
+  const itemRows = sqlite.prepare(
+    `SELECT card_id as cardId, quantity FROM collection_items WHERE deck_id = ?`
+  ).all(deckId) as Array<{ cardId: string; quantity: number }>;
+  const cards = cardsByIds(itemRows.map(i => i.cardId));
+
+  const items = itemRows.map(i => {
+    const c = cards.get(i.cardId);
+    return {
+      quantity: i.quantity,
+      cardId: i.cardId,
+      name: c?.name || '',
+      typeLine: c?.typeLine ?? null,
+      legalities: c?.legalities ?? null,
+      colorIdentity: c?.colorIdentity ?? null,
+      oracleText: c?.oracleText ?? null,
+    };
+  });
 
   let commander: any = null;
   let partner: any = null;
   let background: any = null;
   if (format === 'commander') {
-    const fetchCmd = (id: string | null) => id ? sqlite.prepare(
-      'SELECT id as cardId, name, type_line as typeLine, legalities, color_identity as colorIdentity, oracle_text as oracleText FROM scryfall_cards WHERE id = ?'
-    ).get(id) as any : null;
+    const fetchCmd = (id: string | null) => {
+      if (!id) return null;
+      const c = cardById(id);
+      if (!c) return null;
+      return { cardId: c.id, name: c.name, typeLine: c.typeLine, legalities: c.legalities, colorIdentity: c.colorIdentity, oracleText: c.oracleText };
+    };
     commander = fetchCmd(deck.commanderCardId);
     partner = fetchCmd(deck.partnerCardId);
     background = fetchCmd(deck.backgroundCardId);

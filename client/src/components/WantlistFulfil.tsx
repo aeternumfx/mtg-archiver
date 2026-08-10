@@ -3,7 +3,7 @@ import { Box, Text, Group, Button, Modal, Select, ScrollArea, Badge, ActionIcon,
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconExternalLink, IconArchive, IconPlus, IconBolt, IconCalendarClock } from '@tabler/icons-react';
-import { api } from '../api/client';
+import { api, authFetch } from '../api/client';
 import type { Location } from '../types';
 import { SetSymbol, GhostThumb } from './CardDisplay';
 export interface WantlistFulfilItem {
@@ -86,7 +86,7 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone, cu
     openInternal();
     setInternalLoading(true);
     try {
-      const res = await fetch(`/api/collection/grouped?q=${encodeURIComponent(item.cardName)}`);
+      const res = await authFetch(`/api/collection/grouped?q=${encodeURIComponent(item.cardName)}`);
       const data = await res.json();
       const items = (data.groups || []).flatMap((g: any) => g.items || []);
       setInternalCopies(items

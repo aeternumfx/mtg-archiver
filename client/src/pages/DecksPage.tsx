@@ -8,7 +8,7 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt } from '@tabler/icons-react';
-import { api } from '../api/client';
+import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
 import { CardThumb, SetSymbol, GhostThumb } from '../components/CardDisplay';
@@ -406,7 +406,7 @@ export default function DecksPage() {
     setCollectionPickItems([]);
     openCollectionPick();
     try {
-      const res = await fetch(`/api/collection/grouped?q=${encodeURIComponent(card.name)}`);
+      const res = await authFetch(`/api/collection/grouped?q=${encodeURIComponent(card.name)}`);
       const data = await res.json();
       const items = data.groups?.flatMap((g: any) => g.items) || [];
       setCollectionPickItems(items.filter((i: CollectionItem) => i.card && i.card.name.toLowerCase() === card.name.toLowerCase()));
@@ -490,7 +490,7 @@ export default function DecksPage() {
     setFillReqId(req.id);
     setFillCardName(req.cardName);
     try {
-      const res = await fetch(`/api/collection/grouped?q=${encodeURIComponent(req.cardName)}`);
+      const res = await authFetch(`/api/collection/grouped?q=${encodeURIComponent(req.cardName)}`);
       const data = await res.json();
       const items = data.groups?.flatMap((g: any) => g.items) || [];
       setFillCollectionItems(items.filter((i: CollectionItem) => i.card && i.card.name.toLowerCase() === req.cardName.toLowerCase()));
@@ -1258,7 +1258,7 @@ export default function DecksPage() {
           <Box pos="relative">
             <LoadingOverlay visible={loading} />
             {decks.length === 0 && !loading && <Text c="dimmed" ta="center" py="xl">No decks yet. Create your first deck!</Text>}
-            <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="md">
+            <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }} spacing="md" data-tour="decks-list">
               {decks.map(deck => (
                 <Paper key={deck.id} withBorder radius="md" style={{ overflow: 'hidden', cursor: 'pointer' }}
                   onClick={() => openDeck(deck)}>

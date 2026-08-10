@@ -5,6 +5,13 @@ data/*.db-shm
 data/*.db-wal
 data/*.json
 data/*.zip
+data/users/
+data/images/
+data/backups/
+data/.uploads/
+data/.restore-staging-*
+data/.backup-staging-*
+data/system.db*
 client/dist/
 *.tsbuildinfo
 .dev.pids*

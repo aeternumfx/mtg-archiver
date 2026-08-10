@@ -1,19 +1,216 @@
 import type { PaginatedResponse, GroupedCard, ScryfallCard, CardResult, Location, LocationGroup, CollectionItem, SyncStatus } from '../types';
 
+let onUnauthorized: (() => void) | null = null;
+
+export function setOnUnauthorized(fn: (() => void) | null) {
+  onUnauthorized = fn;
+}
+
+function isAuthProbe(url: string): boolean {
+  return url.includes('/api/auth/me') || url.includes('/api/auth/login');
+}
+
+function handleAuthError(status: number, url: string): boolean {
+  if (status === 401) {
+    if (!isAuthProbe(url)) onUnauthorized?.();
+    return true;
+  }
+  return false;
+}
+
+async function parseError(res: Response, url: string): Promise<Error> {
+  const err = await res.json().catch(() => ({ error: res.statusText }));
+  handleAuthError(res.status, url);
+  return new Error(err.error || res.statusText);
+}
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     ...options,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
-  }
+  if (!res.ok) throw await parseError(res, url);
   if (res.status === 204) return undefined as T;
   return res.json();
 }
 
+export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
+  const res = await fetch(url, { credentials: 'include', ...options });
+  if (res.status === 401) onUnauthorized?.();
+  return res;
+}
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  role: 'admin' | 'moderator' | 'user';
+  mustChangePassword: boolean;
+  impersonating?: boolean;
+  impersonatedBy?: string | null;
+  isDemo?: boolean;
+}
+
+export interface SystemSettings {
+  scryfallStaleHours: number;
+  setsRefreshHours: number;
+  sessionTtlDays: number;
+  instanceName: string;
+  domain: string;
+  adminContactName: string;
+  adminContactEmail: string;
+}
+
+export interface UpdateStatus {
+  checkedAt: number;
+  version: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  latestUrl: string | null;
+  releaseNotes: string | null;
+  autoUpdateAvailable: boolean;
+}
+
+export type RequestType = 'help' | 'feature' | 'bug' | 'feedback' | 'other';
+
+export interface UserRequest {
+  id: number;
+  userId: number;
+  username: string;
+  type: RequestType;
+  subject: string;
+  message: string | null;
+  urgent: number;
+  status: 'open' | 'resolved';
+  createdAt: string;
+}
+
 export const api = {
+  meta: () => request<{ instanceName: string; adminContactName: string; adminContactEmail: string; version: string; instanceSetupDone: boolean }>('/api/meta'),
+
+  requests: {
+    submit: (data: { type: RequestType; subject: string; message?: string; urgent?: boolean }) =>
+      request<UserRequest>('/api/requests', { method: 'POST', body: JSON.stringify(data) }),
+  },
+
+  moderator: {
+    summary: () => request<Record<string, number>>('/api/requests/summary'),
+  },
+  auth: {
+    me: () => request<{ user: AuthUser }>('/api/auth/me'),
+    login: (username: string, password: string) =>
+      request<{ user: AuthUser }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username, password }),
+      }),
+    demoLogin: () =>
+      request<{ user: AuthUser }>('/api/auth/demo-login', { method: 'POST' }),
+    setupLogin: () =>
+      request<{ user: AuthUser }>('/api/auth/setup-login', { method: 'POST' }),
+    logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+    exitImpersonation: () => request<{ ok: boolean }>('/api/auth/exit-impersonation', { method: 'POST' }),
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<{ ok: boolean; user: AuthUser }>('/api/auth/change-password', {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword, newPassword }),
+      }),
+  },
+
+  admin: {
+    users: () => request<Array<{ id: number; username: string; role: string; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null; activeSessions: number; pendingTour: boolean; demo: boolean }>>('/api/admin/users'),
+    setupStatus: () => request<{ done: boolean; adminUsername: string }>('/api/admin/setup-status'),
+    completeSetup: (data: { domain: string; adminContactName: string; adminContactEmail: string; demoEnabled: boolean; currentPassword?: string; newPassword?: string }) =>
+      request<{ ok: boolean; settings: SystemSettings }>('/api/admin/complete-setup', { method: 'POST', body: JSON.stringify(data) }),
+    demoStatus: () => request<{ exists: boolean; enabled: boolean; username: string }>('/api/admin/demo'),
+    setDemo: (enabled: boolean) =>
+      request<{ enabled: boolean; message: string }>('/api/admin/demo', { method: 'POST', body: JSON.stringify({ enabled }) }),
+    updateStatus: () => request<UpdateStatus>('/api/admin/update/status'),
+    updateCheck: () => request<UpdateStatus>('/api/admin/update/check', { method: 'POST' }),
+    updateNow: () =>
+      request<{ message: string; backupFile: string; version: string }>('/api/admin/update', { method: 'POST' }),
+    restore: async (file: File): Promise<{ message: string }> => {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/admin/restore', { method: 'POST', credentials: 'include', body: form });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Restore failed' }));
+        throw new Error(err.error || 'Restore failed');
+      }
+      return res.json();
+    },
+    backupDownload: async (): Promise<void> => {
+      const res = await fetch('/api/admin/backup', { credentials: 'include' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Backup failed' }));
+        throw new Error(err.error || 'Backup failed');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const m = disposition.match(/filename="?([^";]+)"?/);
+      const filename = m?.[1] || `mtg-archiver-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+    overview: () => request<{ users: number; admins: number; disabled: number; userDbs: number }>('/api/admin/overview'),
+    stats: () => request<{
+      users: { total: number; admins: number; disabled: number; active7d: number; active30d: number; activeSessions: number };
+      storage: {
+        systemDbBytes: number;
+        usersBytes: number;
+        perUser: Array<{ userId: number; username: string; bytes: number }>;
+        images: { files: number; bytes: number };
+        dataDirFree: number;
+      };
+      catalog: { cards: number; sets: number; syncing: boolean; lastSync: string | null; stage: string | null; nextSyncDue: string | null; jobs: string[] };
+      calls: { scryfall: number; images: number };
+    }>('/api/admin/stats'),
+    feed: (limit = 100) => request<Array<{ id: number; ts: string; username: string | null; method: string; path: string; status: number }>>(`/api/admin/feed?limit=${limit}`),
+    settings: () => request<SystemSettings>('/api/admin/settings'),
+    updateSettings: (partial: Partial<SystemSettings>) =>
+      request<SystemSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(partial) }),
+    requests: (type?: RequestType | 'all', status?: 'open' | 'resolved' | 'all') => {
+      const p = new URLSearchParams();
+      if (type) p.set('type', type);
+      if (status) p.set('status', status);
+      return request<{ data: UserRequest[]; counts: Record<string, number> }>(`/api/admin/requests${p.toString() ? `?${p}` : ''}`);
+    },
+    updateRequest: (id: number, status: 'open' | 'resolved') =>
+      request<UserRequest>(`/api/admin/requests/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+    deleteRequest: (id: number) =>
+      request<void>(`/api/admin/requests/${id}`, { method: 'DELETE' }),
+    restoreRequest: (req: UserRequest) =>
+      request<UserRequest>(`/api/admin/requests/${req.id}/restore`, { method: 'POST', body: JSON.stringify({ request: req }) }),
+    clearRequests: () => request<{ message: string }>('/api/admin/clear-requests', { method: 'POST' }),
+    clearActivity: () => request<{ message: string }>('/api/admin/clear-activity', { method: 'POST' }),
+    clearImages: () => request<{ message: string }>('/api/admin/clear-images', { method: 'POST' }),
+    resetSettings: () => request<{ settings: SystemSettings; message: string }>('/api/admin/reset-settings', { method: 'POST' }),
+    resetInstance: () => request<{ message: string }>('/api/admin/reset-instance', { method: 'POST' }),
+    createUser: (username: string, role?: string) =>
+      request<{ user: { id: number; username: string; role: string; mustChangePassword: boolean }; tempPassword: string }>('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({ username, role }),
+      }),
+    resetPassword: (id: number, password?: string) =>
+      request<{ tempPassword: string; mustChangePassword: boolean }>(`/api/admin/users/${id}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
+    updateUser: (id: number, data: { disabled?: boolean; role?: 'admin' | 'moderator' | 'user'; mustChangePassword?: boolean; username?: string }) =>
+      request<any>(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    revokeSessions: (id: number) =>
+      request<{ message: string }>(`/api/admin/users/${id}/revoke-sessions`, { method: 'POST' }),
+    impersonate: (id: number) =>
+      request<{ user: AuthUser }>(`/api/admin/users/${id}/impersonate`, { method: 'POST' }),
+    resetTour: (id: number) =>
+      request<{ message: string }>(`/api/admin/users/${id}/reset-tour`, { method: 'POST' }),
+    deleteUser: (id: number, permanent?: boolean) =>
+      request<{ message: string }>(`/api/admin/users/${id}`, { method: 'DELETE', body: JSON.stringify({ permanent }) }),
+  },
+
   syncStatus: () => request<SyncStatus>('/api/sync-status'),
 
   dashboard: {
@@ -88,16 +285,15 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ data, mode }),
       }),
-    delete: (mode: 'wipe' | 'basic' | 'demo') =>
+    delete: () =>
       request<{ message: string }>('/api/data/delete', {
         method: 'POST',
-        body: JSON.stringify({ mode }),
       }),
   },
 
   wantlist: {
     list: () => request<Array<{ id: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; foil: number; condition: string | null; quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; persistent: number; createdAt: string }>>('/api/wantlist'),
-    paged: (page: number, pageSize = 50, params?: { destinationId?: number; q?: string; sort?: string; order?: string; filters?: Record<string, string> }) => {
+    paged: (page: number, pageSize = 50, params?: { destinationId?: number; q?: string; sort?: string; order?: string; filters?: Record<string, string>; tradeGhosts?: string }) => {
       const p = new URLSearchParams();
       p.set('page', String(page));
       p.set('pageSize', String(pageSize));
@@ -105,8 +301,9 @@ export const api = {
       if (params?.q) p.set('q', params.q);
       if (params?.sort) p.set('sort', params.sort);
       if (params?.order) p.set('order', params.order);
+      if (params?.tradeGhosts) p.set('tradeGhosts', params.tradeGhosts);
       if (params?.filters) for (const [k, v] of Object.entries(params.filters)) if (v) p.set(k, v);
-      return request<{ data: Array<{ id: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; foil: number; condition: string | null; quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; persistent: number; createdAt: string }>; total: number; page: number; pageSize: number; totalPages: number }>(`/api/wantlist?${p}`);
+      return request<{ data: Array<{ id: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; foil: number; condition: string | null; quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; tradeId: number | null; persistent: number; createdAt: string }>; total: number; page: number; pageSize: number; totalPages: number }>(`/api/wantlist?${p}`);
     },
     add: (data: { cardId?: string; cardName: string; setCode?: string; collectorNumber?: string; foil?: boolean; condition?: string | null; quantity?: number; notes?: string; destinationId?: number | null; collectionGoalId?: number | null; persistent?: boolean; deckRequiredId?: number | null }) =>
       request<any>('/api/wantlist', { method: 'POST', body: JSON.stringify(data) }),
@@ -229,7 +426,7 @@ export const api = {
       destinationId?: number | null;
       forceNew?: boolean;
     }): Promise<{ item: CollectionItem; created: boolean }> => {
-      const res = await fetch('/api/collection', {
+      const res = await authFetch('/api/collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),

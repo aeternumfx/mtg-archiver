@@ -1,6 +1,8 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
-import { db, sqlite, schema } from '../db';
+import { db, sqlite, catalogDb, schema } from '../db';
 import { eq, inArray } from 'drizzle-orm';
+import { cardById, cardsByIds } from '../services/cards';
 
 export const collectionGoalsRouter = Router();
 
@@ -13,18 +15,29 @@ collectionGoalsRouter.get('/', (_req, res) => {
     JOIN locations l ON l.id = g.location_id
     ORDER BY g.created_at DESC
   `).all() as any[];
+
+  const goalIds = goals.map(g => g.id);
+  const wlRows = goalIds.length ? sqlite.prepare(
+    `SELECT collection_goal_id as goalId, card_id as cardId FROM wantlist_items WHERE collection_goal_id IN (${goalIds.map(() => '?').join(',')})`
+  ).all(...goalIds) as Array<{ goalId: number; cardId: string }> : [];
+  const cards = cardsByIds(wlRows.map(r => r.cardId));
+  const costByGoal = new Map<number, number>();
+  for (const r of wlRows) {
+    const card = cards.get(r.cardId);
+    if (!card?.prices) continue;
+    let prices: Record<string, any> = {};
+    try { prices = JSON.parse(card.prices); } catch { prices = {}; }
+    const v = Number(prices.usd) || 0;
+    costByGoal.set(r.goalId, (costByGoal.get(r.goalId) ?? 0) + v);
+  }
+
   const withCounts = goals.map(g => {
     const remaining = sqlite.prepare(
       'SELECT COUNT(*) as c FROM wantlist_items WHERE collection_goal_id = ?'
     ).get(g.id) as { c: number };
-    const cost = sqlite.prepare(`
-      SELECT COALESCE(SUM(json_extract(sc.prices, '$.usd')), 0) as total
-      FROM wantlist_items w
-      JOIN scryfall_cards sc ON sc.id = w.card_id
-      WHERE w.collection_goal_id = ?
-    `).get(g.id) as { total: number };
+    const cost = costByGoal.get(g.id) ?? 0;
     const percent = g.targetCount ? Math.min(100, Math.round(((g.fulfilledCount || 0) / g.targetCount) * 100)) : 0;
-    return { ...g, remaining: remaining.c, remainingCost: Math.round(cost.total * 100) / 100, percent };
+    return { ...g, remaining: remaining.c, remainingCost: Math.round(cost * 100) / 100, percent };
   });
   res.json(withCounts);
 });
@@ -62,7 +75,7 @@ collectionGoalsRouter.post('/', (req, res) => {
 
       let created = 0;
       if (kind === 'specific' && cardId) {
-        const card = db.select().from(schema.scryfallCards).where(eq(schema.scryfallCards.id, cardId)).get();
+        const card = cardById(cardId);
         if (!card) throw new Error('Card not found');
         db.insert(schema.wantlistItems).values({
           cardId: card.id, cardName: card.name, setCode: card.setCode, collectorNumber: card.collectorNumber,
@@ -76,7 +89,7 @@ collectionGoalsRouter.post('/', (req, res) => {
         created = 1;
       } else if (kind === 'set' && setCodes && setCodes.length > 0) {
         const codes = (Array.isArray(setCodes) ? setCodes : [String(setCodes)]).filter(Boolean);
-        const cards = db.select().from(schema.scryfallCards)
+        const cards = catalogDb.select().from(schema.scryfallCards)
           .where(inArray(schema.scryfallCards.setCode, codes))
           .all();
         const insert = sqlite.prepare(`
@@ -101,7 +114,7 @@ collectionGoalsRouter.post('/', (req, res) => {
     if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'Location name already exists' });
     }
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -114,6 +127,6 @@ collectionGoalsRouter.delete('/:id', (req, res) => {
     })();
     res.status(204).end();
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });

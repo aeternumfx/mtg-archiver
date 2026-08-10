@@ -83,7 +83,7 @@ export default function Dashboard() {
     <>
       <Title order={2} mb="lg">Dashboard</Title>
 
-      <Grid mb="lg">
+      <Grid mb="lg" data-tour="dashboard-stats">
         <Grid.Col span={{ base: 12, sm: 6, md: 3 }}>
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group>

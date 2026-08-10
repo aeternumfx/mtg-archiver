@@ -1,6 +1,8 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq, desc } from 'drizzle-orm';
+import { cardById } from '../services/cards';
 
 export const boosterRouter = Router();
 
@@ -42,9 +44,7 @@ boosterRouter.post('/finish', (req, res) => {
   try {
     const result = sqlite.transaction(() => {
       const totalValue = pulls.reduce((sum: number, p: any) => {
-        const card = db.select().from(schema.scryfallCards)
-          .where(eq(schema.scryfallCards.id, p.cardId))
-          .get();
+        const card = cardById(p.cardId);
         if (card && card.prices) {
           const prices = JSON.parse(card.prices);
           const val = p.foil ? prices.usd_foil : prices.usd;
@@ -102,6 +102,6 @@ boosterRouter.post('/finish', (req, res) => {
 
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });

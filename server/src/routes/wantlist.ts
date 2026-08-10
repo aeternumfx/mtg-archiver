@@ -1,6 +1,8 @@
+import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq } from 'drizzle-orm';
+import { cardsByIds } from '../services/cards';
 
 export const wantlistRouter = Router();
 
@@ -10,7 +12,7 @@ wantlistRouter.get('/', (req, res) => {
   const destinationId = req.query.destinationId ? Number(req.query.destinationId) : undefined;
   const q = (req.query.q as string ?? '').trim();
   const sort = (req.query.sort as string) || 'created';
-  const order = (req.query.order as string) === 'asc' ? 'ASC' : 'DESC';
+  const order = (req.query.order as string) === 'asc' ? 1 : -1;
   const rarityFilter = (req.query.rarity as string) || '';
   const typeFilter = (req.query.type as string) || '';
   const conditionFilter = (req.query.condition as string) || '';
@@ -23,105 +25,111 @@ wantlistRouter.get('/', (req, res) => {
   const conditions: string[] = [];
   const queryParams: any[] = [];
 
+  if (req.query.tradeGhosts !== '1') {
+    conditions.push('trade_id IS NULL');
+  }
+
   if (destinationId) {
-    conditions.push('w.destination_id = ?');
+    conditions.push('destination_id = ?');
     queryParams.push(destinationId);
   }
   if (q) {
     const pattern = `%${q.replace(/['"]/g, '')}%`;
-    conditions.push('(w.card_name LIKE ? OR sc.name LIKE ?)');
-    queryParams.push(pattern, pattern);
-  }
-  for (const key of Object.keys(req.query).filter(k => k.startsWith('c_'))) {
-    const color = key.slice(2).toUpperCase();
-    const val = req.query[key] as string;
-    if (val === 'include') {
-      conditions.push('(sc.color_identity IS NOT NULL AND sc.color_identity LIKE ?)');
-      queryParams.push(`%"${color}"%`);
-    } else if (val === 'exclude') {
-      conditions.push('(sc.color_identity IS NULL OR sc.color_identity NOT LIKE ?)');
-      queryParams.push(`%"${color}"%`);
-    }
-  }
-  const rarityList = rarityFilter.split(',').filter(Boolean);
-  if (rarityList.length > 0) {
-    conditions.push(`sc.rarity IN (${rarityList.map(() => '?').join(',')})`);
-    queryParams.push(...rarityList);
-  }
-  const typeList = typeFilter.split(',').filter(Boolean);
-  if (typeList.length > 0) {
-    conditions.push(`(${typeList.map(() => 'sc.type_line LIKE ?').join(' OR ')})`);
-    queryParams.push(...typeList.map(t => `%${t}%`));
+    conditions.push('card_name LIKE ?');
+    queryParams.push(pattern);
   }
   const condList = conditionFilter.split(',').filter(Boolean);
   if (condList.length > 0) {
-    conditions.push(`w.condition IN (${condList.map(() => '?').join(',')})`);
+    conditions.push(`condition IN (${condList.map(() => '?').join(',')})`);
     queryParams.push(...condList);
   }
   if (foilFilter !== undefined) {
-    conditions.push('w.foil = ?');
+    conditions.push('foil = ?');
     queryParams.push(foilFilter);
-  }
-  if (cmcMin !== undefined) {
-    conditions.push('sc.cmc >= ?');
-    queryParams.push(cmcMin);
-  }
-  if (cmcMax !== undefined) {
-    conditions.push('sc.cmc <= ?');
-    queryParams.push(cmcMax);
-  }
-
-  const priceExpr = `CASE WHEN w.foil THEN json_extract(sc.prices, '$.usd_foil') ELSE json_extract(sc.prices, '$.usd') END`;
-  if (valueMin !== undefined) {
-    conditions.push(`${priceExpr} >= ?`);
-    queryParams.push(valueMin);
-  }
-  if (valueMax !== undefined) {
-    conditions.push(`${priceExpr} <= ?`);
-    queryParams.push(valueMax);
   }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-  const orderCol = (() => {
-    switch (sort) {
-      case 'name': return 'w.card_name';
-      case 'set': return 'w.set_code';
-      case 'foil': return 'w.foil';
-      case 'cond': return 'w.condition';
-      case 'price': return priceExpr;
-      case 'qty': return 'w.card_name';
-      default: return 'w.created_at';
-    }
-  })();
-
-  const baseSql = `FROM wantlist_items w LEFT JOIN scryfall_cards sc ON sc.id = w.card_id ${where}`;
-  const total = (sqlite.prepare(`SELECT COUNT(*) as c ${baseSql}`).get(...queryParams) as { c: number }).c;
-
-  if (req.query.page === undefined) {
-    const rows = sqlite.prepare(
-      `SELECT w.id, w.card_id as cardId, w.card_name as cardName, w.set_code as setCode, w.collector_number as collectorNumber,
-         w.foil, w.condition, w.quantity, w.notes, w.destination_id as destinationId, w.collection_goal_id as collectionGoalId,
-         w.deck_required_id as deckRequiredId, w.persistent, w.created_at as createdAt
-       ${baseSql} ORDER BY ${orderCol} ${order}`,
-    ).all(...queryParams) as any[];
-    return res.json(rows);
+  const colorInclude: string[] = [];
+  const colorExclude: string[] = [];
+  for (const key of Object.keys(req.query)) {
+    if (key.startsWith('c_') && req.query[key] === 'include') colorInclude.push(key.slice(2).toUpperCase());
+    if (key.startsWith('c_') && req.query[key] === 'exclude') colorExclude.push(key.slice(2).toUpperCase());
   }
+  const rarityList = rarityFilter.split(',').filter(Boolean);
+  const typeList = typeFilter.split(',').filter(Boolean);
+
+  const baseSql = `FROM wantlist_items w ${where}`;
+  const total = (sqlite.prepare(`SELECT COUNT(*) as c ${baseSql}`).get(...queryParams) as { c: number }).c;
 
   const rows = sqlite.prepare(
     `SELECT w.id, w.card_id as cardId, w.card_name as cardName, w.set_code as setCode, w.collector_number as collectorNumber,
        w.foil, w.condition, w.quantity, w.notes, w.destination_id as destinationId, w.collection_goal_id as collectionGoalId,
-       w.persistent, w.created_at as createdAt
-     ${baseSql} ORDER BY ${orderCol} ${order} LIMIT ? OFFSET ?`,
-  ).all(...queryParams, pageSize, (page - 1) * pageSize) as any[];
+       w.deck_required_id as deckRequiredId, w.trade_id as tradeId, w.persistent, w.created_at as createdAt
+     ${baseSql}`
+  ).all(...queryParams) as any[];
 
-  res.json({
-    data: rows,
-    total,
-    page,
-    pageSize,
-    totalPages: Math.ceil(total / pageSize),
+  const cards = cardsByIds(rows.map(r => r.cardId));
+
+  const priceOf = (row: any): number => {
+    const card = row.cardId ? cards.get(row.cardId) : undefined;
+    if (!card?.prices) return 0;
+    let prices: Record<string, any> = {};
+    try { prices = JSON.parse(card.prices); } catch { prices = {}; }
+    const key = row.foil ? 'usd_foil' : 'usd';
+    const v = prices[key] ?? prices.usd ?? 0;
+    return Number(v) || 0;
+  };
+
+  const matches = (row: any): boolean => {
+    const card = row.cardId ? cards.get(row.cardId) : undefined;
+    if (colorInclude.length || colorExclude.length || rarityList.length || typeList.length ||
+        (cmcMin !== undefined && !isNaN(cmcMin)) || (cmcMax !== undefined && !isNaN(cmcMax))) {
+      if (!card) return false;
+      let identity: string[] = [];
+      if (card.colorIdentity) {
+        try { identity = JSON.parse(card.colorIdentity); } catch { identity = []; }
+      }
+      for (const c of colorInclude) if (!identity.includes(c)) return false;
+      for (const c of colorExclude) if (identity.includes(c)) return false;
+      if (rarityList.length > 0 && !rarityList.includes(card.rarity ?? '')) return false;
+      if (typeList.length > 0) {
+        const tl = card.typeLine || '';
+        if (!typeList.some(t => tl.toLowerCase().includes(t.toLowerCase()))) return false;
+      }
+      if (cmcMin !== undefined && !isNaN(cmcMin) && (card.cmc ?? 0) < cmcMin) return false;
+      if (cmcMax !== undefined && !isNaN(cmcMax) && (card.cmc ?? 0) > cmcMax) return false;
+    }
+    const price = priceOf(row);
+    if (valueMin !== undefined && price < valueMin) return false;
+    if (valueMax !== undefined && price > valueMax) return false;
+    return true;
+  };
+
+  const filtered = rows.filter(matches);
+  filtered.sort((a, b) => {
+    let cmp = 0;
+    switch (sort) {
+      case 'name': cmp = a.cardName.localeCompare(b.cardName); break;
+      case 'set': cmp = (a.setCode || '').localeCompare(b.setCode || ''); break;
+      case 'foil': cmp = (a.foil || 0) - (b.foil || 0); break;
+      case 'cond': cmp = (a.condition || '').localeCompare(b.condition || ''); break;
+      case 'price': cmp = priceOf(a) - priceOf(b); break;
+      case 'qty': cmp = a.cardName.localeCompare(b.cardName); break;
+      default: cmp = (a.createdAt || '').localeCompare(b.createdAt || ''); break;
+    }
+    return cmp * order;
   });
+
+  const totalCount = filtered.length;
+  const totalPages = Math.ceil(totalCount / pageSize);
+
+  if (req.query.page === undefined) {
+    return res.json(filtered);
+  }
+
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
+  res.json({ data: paginated, total: totalCount, page, pageSize, totalPages });
 });
 
 wantlistRouter.post('/', (req, res) => {
@@ -140,7 +148,7 @@ wantlistRouter.post('/', (req, res) => {
       .returning().get();
     res.status(201).json(item);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -149,7 +157,7 @@ wantlistRouter.delete('/:id', (req, res) => {
     db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, Number(req.params.id))).run();
     res.status(204).end();
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
 
@@ -201,6 +209,6 @@ wantlistRouter.post('/:id/fulfil', (req, res) => {
       },
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    fail(res, err);
   }
 });
