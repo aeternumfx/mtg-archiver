@@ -134,7 +134,7 @@ export default function AdminRequestsPage() {
                           </Text>
                         )}
                       </Table.Td>
-                      <Table.Td>{r.username}</Table.Td>
+                      <Table.Td>@{r.username}</Table.Td>
                       <Table.Td style={{ whiteSpace: 'nowrap' }}>{new Date(r.createdAt).toLocaleString()}</Table.Td>
                       <Table.Td>
                         <Badge size="sm" variant="light" color={r.status === 'open' ? 'yellow' : 'green'}>{r.status}</Badge>

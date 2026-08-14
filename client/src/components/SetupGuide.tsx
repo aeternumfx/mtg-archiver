@@ -3,7 +3,7 @@ import { Modal, Group, Text, Button, Card, Stack, Badge, Box, SimpleGrid } from 
 import {
   IconTarget, IconList, IconPackage, IconStack,
   IconDashboard, IconSettings, IconArrowRight, IconArrowLeft, IconPlus, IconCheck,
-  IconHeart, IconGift, IconArrowsLeftRight, IconSortDescending, IconMessageCircle,
+  IconHeart, IconGift, IconArrowsLeftRight, IconSortDescending, IconMessageCircle, IconUser,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
@@ -18,6 +18,7 @@ interface TourStep {
 }
 
 const TOUR_STEPS: TourStep[] = [
+  { title: 'Profile', icon: IconUser, path: '/profile', target: '[data-tour="nav-profile"]', desc: 'Set a display name and pick a profile picture from any MTG card art. Your avatar shows up in the top-right of every page.' },
   { title: 'Dashboard', icon: IconDashboard, path: '/dashboard', target: '[data-tour="nav-dashboard"]', desc: 'A quick overview of your collection — total cards, market value, breakdowns by rarity, condition and location, your most valuable cards, and recent additions.' },
   { title: 'Organize', icon: IconSortDescending, path: '/organize', target: '[data-tour="nav-organize"]', desc: 'Schedule and resolve moves between locations, with a full history that tracks every action — including undos.' },
   { title: 'Add Cards', icon: IconPlus, path: '/add', target: '[data-tour="nav-add"]', desc: 'Search the entire Scryfall database — by name, by set + collector number (e.g. "blb023"), or with scryfall syntax. Add cards to any location or fulfil a wantlist entry.' },

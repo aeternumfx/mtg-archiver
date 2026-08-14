@@ -1,16 +1,83 @@
 import { fail } from '../utils/http';
 import { Router } from 'express';
-import { db, sqlite, schema } from '../db';
+import { db, sqlite, schema, catalogSqlite } from '../db';
 import { eq, and, or, like, asc, desc, sql } from 'drizzle-orm';
 import { cardsByIds, cardById, parseCardJson } from '../services/cards';
 
 export const collectionRouter = Router();
+
+// When an item's destination changes, reconcile any deck-ghost fill link. If
+// the item was scheduled to fill a deck's required (ghost) card but the new
+// destination no longer points at that deck's location, unlink the ghost so it
+// reverts to an unfilled state. Likewise, if the destination was cleared. If
+// the destination now points at a deck's location with a matching unfilled
+// required (ghost) card, link this item to fill it.
+function reconcileDeckGhostLink(itemId: number) {
+  const item = sqlite.prepare('SELECT card_id, destination_id FROM collection_items WHERE id = ?').get(itemId) as
+    | { card_id: string | null; destination_id: number | null }
+    | undefined;
+  if (!item) return;
+  const reqRow = sqlite.prepare('SELECT id, deck_id FROM deck_required_cards WHERE fill_item_id = ?').get(itemId) as
+    | { id: number; deck_id: number }
+    | undefined;
+
+  if (reqRow) {
+    const deckLoc = sqlite.prepare('SELECT id FROM locations WHERE deck_id = ?').get(reqRow.deck_id) as { id: number } | undefined;
+    const stillTargetsDeck = item.destination_id != null && deckLoc && item.destination_id === deckLoc.id;
+    if (!stillTargetsDeck) {
+      sqlite.prepare('UPDATE deck_required_cards SET fill_item_id = NULL WHERE id = ?').run(reqRow.id);
+    }
+  }
+
+  if (item.destination_id != null) {
+    const deck = sqlite.prepare('SELECT deck_id FROM locations WHERE id = ?').get(item.destination_id) as { deck_id: number | null } | undefined;
+    if (deck && deck.deck_id != null) {
+      const match = sqlite.prepare(
+        'SELECT id FROM deck_required_cards WHERE deck_id = ? AND fill_item_id IS NULL AND (card_id = ? OR card_id IS NULL) LIMIT 1'
+      ).get(deck.deck_id, item.card_id) as { id: number } | undefined;
+      if (match) {
+        sqlite.prepare('UPDATE deck_required_cards SET fill_item_id = ? WHERE id = ?').run(itemId, match.id);
+      }
+    }
+  }
+}
 
 collectionRouter.get('/names', (_req, res) => {
   const rows = sqlite.prepare('SELECT DISTINCT card_id FROM collection_items').all() as Array<{ card_id: string }>;
   const cards = cardsByIds(rows.map(r => r.card_id));
   const names = [...new Set(rows.map(r => cards.get(r.card_id)?.name).filter(Boolean) as string[])].sort();
   res.json(names);
+});
+
+// Returns total collection quantity per card name for the given names.
+collectionRouter.get('/counts', (req, res) => {
+  let names: string[] = [];
+  try {
+    const raw = req.query.names as string | undefined;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) names = parsed.map(String).map(s => s.trim()).filter(Boolean);
+    }
+  } catch { names = []; }
+  if (names.length === 0) return res.json({});
+  const idRows = catalogSqlite.prepare(
+    `SELECT id, name FROM scryfall_cards WHERE name IN (${names.map(() => '?').join(',')})`
+  ).all(...names) as Array<{ id: string; name: string }>;
+  const ids = idRows.map(r => r.id);
+  if (ids.length === 0) return res.json({});
+  const countRows = sqlite.prepare(
+    `SELECT ci.card_id as cardId, SUM(ci.quantity) as total
+     FROM collection_items ci
+     WHERE ci.card_id IN (${ids.map(() => '?').join(',')})
+     GROUP BY ci.card_id`
+  ).all(...ids) as Array<{ cardId: string; total: number }>;
+  const nameById = new Map(idRows.map(r => [r.id, r.name]));
+  const result: Record<string, number> = {};
+  for (const r of countRows) {
+    const n = nameById.get(r.cardId);
+    if (n) result[n] = (result[n] || 0) + r.total;
+  }
+  res.json(result);
 });
 
 collectionRouter.get('/', (req, res) => {
@@ -152,6 +219,8 @@ collectionRouter.patch('/:id', (req, res) => {
     .where(eq(schema.collectionItems.id, id))
     .returning().get();
 
+  if (destinationId !== undefined) reconcileDeckGhostLink(id);
+
   let movedHistoryId: number | null = null;
   if (locationId !== undefined && locationId !== item.locationId) {
     const card = cardById(item.cardId);
@@ -193,6 +262,7 @@ collectionRouter.post('/:id/split-copy', (req, res) => {
         .set({ destinationId: dest })
         .where(eq(schema.collectionItems.id, id))
         .returning().get();
+      reconcileDeckGhostLink(id);
       return res.json(updated);
     }
 
@@ -463,7 +533,8 @@ collectionRouter.get('/grouped', (req, res) => {
     conds.sort((a, b) => condRank(a) - condRank(b));
     return {
       name, typeLine: card.typeLine, manaCost: card.manaCost, cmc: card.cmc,
-      imageUris: card.imageUris, setCodes, totalQty, totalValue,
+      imageUris: card.imageUris, cardFaces: card.cardFaces, layout: card.layout,
+      setCodes, totalQty, totalValue,
       hasFoil: hasFoil ? 1 : 0, bestCondition: conds[0] || null,
       items,
     };
@@ -484,5 +555,36 @@ collectionRouter.get('/grouped', (req, res) => {
   const totalPages = Math.ceil(total / pageSize);
   const paginated = groupsResult.slice((page - 1) * pageSize, page * pageSize);
 
-  res.json({ groups: paginated, total, page, pageSize, totalPages });
+  // Incoming scheduled moves: collection items physically in another location
+  // but scheduled to move into this location. Show them as ghost entries so the
+  // destination location previews what's coming.
+  let incoming: any[] = [];
+  if (locationId) {
+    const incStmt = sqlite.prepare(`
+      SELECT
+        ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
+        ci.foil, ci.condition, ci.quantity, ci.notes,
+        src_loc.name as sourceName
+      FROM collection_items ci
+      JOIN locations src_loc ON src_loc.id = ci.location_id
+      WHERE ci.destination_id = ? AND ci.location_id != ?
+      ORDER BY ci.created_at DESC
+    `);
+    const incRows = incStmt.all(locationId, locationId) as any[];
+    const incCards = cardsByIds(incRows.map(i => i.cardId));
+    incoming = incRows.map(i => ({
+      id: i.id,
+      cardId: i.cardId,
+      locationId: i.locationId,
+      destinationId: i.destinationId,
+      foil: i.foil,
+      condition: i.condition,
+      quantity: i.quantity,
+      notes: i.notes,
+      sourceName: i.sourceName,
+      card: i.cardId && incCards.get(i.cardId) ? parseCardJson(incCards.get(i.cardId)!) : null,
+    }));
+  }
+
+  res.json({ groups: paginated, total, page, pageSize, totalPages, incoming });
 });

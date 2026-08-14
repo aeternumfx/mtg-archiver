@@ -12,15 +12,22 @@ export interface UserRow {
   disabled: number;
   mustChangePassword: number;
   demo: number;
+  displayName: string | null;
+  avatar: string | null;
   createdAt: string;
   lastLoginAt: string | null;
 }
 
 const USER_COLS = `id, username, role, disabled, must_change_password as mustChangePassword, demo,
+  display_name as displayName, avatar,
   created_at as createdAt, last_login_at as lastLoginAt`;
 
 export function getUserByUsername(username: string): UserRow | undefined {
   return systemSqlite.prepare(`SELECT ${USER_COLS} FROM users WHERE username = ?`).get(username) as UserRow | undefined;
+}
+
+export function usernameExistsCaseInsensitive(username: string): boolean {
+  return !!systemSqlite.prepare('SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)').get(username);
 }
 
 export function getUserById(id: number): UserRow | undefined {
@@ -64,6 +71,16 @@ export function updateUser(userId: number, fields: { disabled?: boolean; role?: 
 
 export function touchLastLogin(userId: number) {
   systemSqlite.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(new Date().toISOString(), userId);
+}
+
+export function updateProfile(userId: number, fields: { displayName?: string | null; avatar?: string | null }) {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (fields.displayName !== undefined) { sets.push('display_name = ?'); params.push(fields.displayName); }
+  if (fields.avatar !== undefined) { sets.push('avatar = ?'); params.push(fields.avatar); }
+  if (sets.length === 0) return;
+  params.push(userId);
+  systemSqlite.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...params);
 }
 
 export function listUsers(): UserRow[] {

@@ -152,6 +152,8 @@ export default function AddCardsPage() {
           cmc: groups[n][0]?.cmc ?? null,
           colors: groups[n][0]?.colors ?? null,
           imageUris: groups[n][0]?.imageUris ?? null,
+          cardFaces: groups[n][0]?.cardFaces ?? null,
+          layout: groups[n][0]?.layout ?? null,
           printings: groups[n].length,
           firstPrinting: null,
           lastPrinting: null,
@@ -1095,7 +1097,8 @@ export default function AddCardsPage() {
             <Group gap="lg" mb="md" wrap="nowrap" align="flex-start">
               <Box w={265} h={370} style={{ overflow: 'hidden', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', position: 'relative' }}>
                 <img
-                  src={quickAddCard.imageUris?.large || quickAddCard.imageUris?.normal || quickAddCard.imageUris?.small || ''}
+                  src={quickAddCard.imageUris?.large || quickAddCard.imageUris?.normal || quickAddCard.imageUris?.small
+                    || quickAddCard.cardFaces?.[0]?.image_uris?.large || quickAddCard.cardFaces?.[0]?.image_uris?.normal || ''}
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   alt={quickAddCard.name}
                 />

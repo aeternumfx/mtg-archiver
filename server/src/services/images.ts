@@ -82,22 +82,50 @@ export function clearImageCache() {
   }
 }
 
-export async function resolveImage(cardId: string, size: string): Promise<ResolvedImage | null> {
+export async function resolveImage(cardId: string, size: string, faceIdx?: number): Promise<ResolvedImage | null> {
   if (!VALID_SIZES.has(size)) return null;
   const card = cardById(cardId);
-  if (!card?.imageUris) return null;
-  let uris: Record<string, string>;
-  try {
-    uris = JSON.parse(card.imageUris);
-  } catch {
-    return null;
+  if (!card) return null;
+
+  let url: string | undefined;
+  let cacheTag = '';
+
+  if (faceIdx !== undefined) {
+    if (!card.cardFaces) return null;
+    let faces: Array<{ image_uris?: Record<string, string> }>;
+    try {
+      faces = JSON.parse(card.cardFaces);
+    } catch {
+      return null;
+    }
+    const face = faces[faceIdx];
+    if (!face?.image_uris) return null;
+    // Art cards are double-sided cards where the back face (index 1) is the
+    // actual art-card back. Scryfall's bulk data stores a placeholder for the
+    // back's small/normal/large images, but the display size holds the real
+    // portrait back design. Serve that instead so the back displays properly.
+    if (card.layout === 'art_series' && faceIdx > 0) {
+      url = face.image_uris.display || face.image_uris.art_crop || face.image_uris[size];
+      cacheTag = 'artback';
+    } else {
+      url = face.image_uris[size];
+    }
+  } else {
+    if (!card.imageUris) return null;
+    let uris: Record<string, string>;
+    try {
+      uris = JSON.parse(card.imageUris);
+    } catch {
+      return null;
+    }
+    url = uris[size];
   }
-  const url = uris[size];
   if (!url) return null;
 
   const extMatch = url.match(/\.([a-z0-9]+)(\?|$)/i);
   const ext = extMatch ? extMatch[1]!.toLowerCase() : 'png';
-  const file = path.join(imagesDir, `${cardId}-${size}.${ext}`);
+  const facePart = faceIdx !== undefined ? `-f${faceIdx}` : '';
+  const file = path.join(imagesDir, `${cardId}-${cacheTag || size}${facePart}.${ext}`);
 
   if (fs.existsSync(file)) {
     return { file, contentType: CONTENT_TYPES[ext] ?? 'application/octet-stream' };

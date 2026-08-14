@@ -79,6 +79,7 @@ export const deckRequiredCards = sqliteTable('deck_required_cards', {
   setCode: text('set_code'),
   collectorNumber: text('collector_number'),
   quantity: integer('quantity').notNull().default(1),
+  fillItemId: integer('fill_item_id').references(() => collectionItems.id),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
 });
 
@@ -130,6 +131,8 @@ export const users = sqliteTable('users', {
   mustChangePassword: integer('must_change_password').notNull().default(0),
   disabled: integer('disabled').notNull().default(0),
   demo: integer('demo').notNull().default(0),
+  displayName: text('display_name'),
+  avatar: text('avatar'),
   createdAt: text('created_at').notNull().$default(() => new Date().toISOString()),
   lastLoginAt: text('last_login_at'),
 });

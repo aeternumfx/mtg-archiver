@@ -5,9 +5,10 @@ import {
   createSession, deleteSession, sessionCookieOptions, COOKIE_NAME, IMPERSONATE_COOKIE,
   readSessionCookie, readImpersonationCookie,
 } from '../auth/sessions';
-import { getUserByUsername, getUserById, getUserPasswordHash, setUserPassword, touchLastLogin, listUsers } from '../auth/users';
+import { getUserByUsername, getUserById, getUserPasswordHash, setUserPassword, touchLastLogin, listUsers, updateProfile, type UserRow } from '../auth/users';
 import { requireAuth, type AuthenticatedRequest } from '../auth/middleware';
 import { isInstanceSetupDone } from '../services/setupStatus';
+import { cardById } from '../services/cards';
 
 export const authRouter = Router();
 
@@ -35,6 +36,18 @@ const changePasswordLimiter = rateLimit({
   message: { error: 'Too many password change attempts, please try again later.' },
 });
 
+function serializeUser(u: UserRow) {
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    mustChangePassword: !!u.mustChangePassword,
+    isDemo: !!u.demo,
+    displayName: u.displayName,
+    avatar: u.avatar,
+  };
+}
+
 authRouter.post('/login', loginLimiter, (req, res) => {
   const { username, password } = req.body ?? {};
   if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
@@ -49,9 +62,7 @@ authRouter.post('/login', loginLimiter, (req, res) => {
   const { token } = createSession(user.id);
   touchLastLogin(user.id);
   res.cookie(COOKIE_NAME, token, sessionCookieOptions());
-  res.json({
-    user: { id: user.id, username: user.username, role: user.role, mustChangePassword: !!user.mustChangePassword },
-  });
+  res.json({ user: serializeUser(user) });
 });
 
 authRouter.post('/demo-login', demoLoginLimiter, (req, res) => {
@@ -62,9 +73,7 @@ authRouter.post('/demo-login', demoLoginLimiter, (req, res) => {
   const { token } = createSession(demo.id);
   touchLastLogin(demo.id);
   res.cookie(COOKIE_NAME, token, sessionCookieOptions());
-  res.json({
-    user: { id: demo.id, username: demo.username, role: demo.role, mustChangePassword: false, isDemo: true },
-  });
+  res.json({ user: serializeUser(demo) });
 });
 
 // One-time bootstrap login: only works before the instance setup is completed.
@@ -83,9 +92,7 @@ authRouter.post('/setup-login', (req, res) => {
   const { token } = createSession(admin.id);
   touchLastLogin(admin.id);
   res.cookie(COOKIE_NAME, token, sessionCookieOptions());
-  res.json({
-    user: { id: admin.id, username: admin.username, role: admin.role, mustChangePassword: !!admin.mustChangePassword },
-  });
+  res.json({ user: serializeUser(admin) });
 });
 
 authRouter.post('/logout', (req, res) => {
@@ -95,20 +102,56 @@ authRouter.post('/logout', (req, res) => {
 });
 
 authRouter.get('/me', requireAuth, (req: AuthenticatedRequest, res) => {
-  const user = req.user!;
+  const row = getUserById(req.user!.userId);
+  if (!row) return res.status(404).json({ error: 'User not found' });
   const impBy = (req as AuthenticatedRequest).impersonatedBy;
   const impersonatedByUsername = impBy ? getUserById(impBy)?.username ?? null : null;
   res.json({
     user: {
-      id: user.userId,
-      username: user.username,
-      role: user.role,
-      mustChangePassword: !!user.mustChangePassword,
+      ...serializeUser(row),
       impersonating: !!req.impersonating,
       impersonatedBy: impersonatedByUsername,
-      isDemo: !!user.isDemo,
     },
   });
+});
+
+authRouter.put('/profile', requireAuth, (req: AuthenticatedRequest, res) => {
+  const { displayName, avatarCardId, avatarFace } = req.body ?? {};
+  const userId = req.user!.userId;
+
+  if (displayName !== undefined) {
+    if (typeof displayName !== 'string') {
+      return res.status(400).json({ error: 'Invalid display name' });
+    }
+    const trimmed = displayName.trim().slice(0, 60);
+    updateProfile(userId, { displayName: trimmed || null });
+  }
+
+  if (avatarCardId !== undefined) {
+    if (avatarCardId === null) {
+      updateProfile(userId, { avatar: null });
+    } else {
+      if (typeof avatarCardId !== 'string' || !avatarCardId.trim()) {
+        return res.status(400).json({ error: 'Invalid card id' });
+      }
+      let faceIdx: number | undefined;
+      if (avatarFace !== undefined && avatarFace !== null) {
+        faceIdx = Number(avatarFace);
+        if (!Number.isInteger(faceIdx) || faceIdx < 0 || faceIdx > 5) {
+          return res.status(400).json({ error: 'Invalid face index' });
+        }
+      }
+      const card = cardById(avatarCardId.trim());
+      if (!card) return res.status(400).json({ error: 'Card not found' });
+      const url = faceIdx !== undefined
+        ? `/api/images/${card.id}/art_crop/${faceIdx}`
+        : `/api/images/${card.id}/art_crop`;
+      updateProfile(userId, { avatar: url });
+    }
+  }
+
+  const updated = getUserById(userId)!;
+  res.json({ user: serializeUser(updated) });
 });
 
 authRouter.post('/exit-impersonation', requireAuth, (req, res) => {
@@ -136,5 +179,5 @@ authRouter.post('/change-password', changePasswordLimiter, requireAuth, (req: Au
   deleteSession(readSessionCookie(req));
   const { token } = createSession(user.id);
   res.cookie(COOKIE_NAME, token, sessionCookieOptions());
-  res.json({ ok: true, user: { id: user.id, username: user.username, role: user.role, mustChangePassword: false } });
+  res.json({ ok: true, user: serializeUser(user) });
 });

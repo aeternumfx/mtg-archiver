@@ -19,6 +19,7 @@ import DecksPage from './pages/DecksPage';
 import WantlistPage from './pages/WantlistPage';
 import TradesPage from './pages/TradesPage';
 import OrganizePage from './pages/OrganizePage';
+import ProfilePage from './pages/ProfilePage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AdminRequestsPage from './pages/admin/AdminRequestsPage';
@@ -75,6 +76,9 @@ export default function App() {
             <Route path="/wantlist" element={<Protected><WantlistPage /></Protected>} />
             <Route path="/trades" element={<Protected><TradesPage /></Protected>} />
             <Route path="/organize" element={<Protected><OrganizePage /></Protected>} />
+            <Route path="/profile" element={
+              <RequireAuth><Layout><ProfilePage /></Layout></RequireAuth>
+            } />
             <Route path="/admin" element={
               <RequireAuth><RequireAdmin><Layout><AdminDashboardPage /></Layout></RequireAdmin></RequireAuth>
             } />

@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Location, LocationGroup, ScryfallCard } from '../types';
 import { CardThumb } from '../components/CardDisplay';
+import { DeckFormModal, type DeckFormValues } from '../components/DeckFormModal';
 
 interface DeckSummary {
   id: number;
@@ -17,6 +18,14 @@ interface DeckSummary {
   description: string | null;
   cardCount: number;
   groupId: number | null;
+}
+
+interface DeckData extends DeckSummary {
+  cardId: string | null;
+  deckType: string | null;
+  commanderCardId: string | null;
+  partnerCardId: string | null;
+  backgroundCardId: string | null;
 }
 
 const ITEM_ICONS: Record<string, any> = {
@@ -36,7 +45,7 @@ const ITEM_LABELS: Record<string, string> = {
 export default function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [groups, setGroups] = useState<LocationGroup[]>([]);
-  const [decks, setDecks] = useState<DeckSummary[]>([]);
+  const [decks, setDecks] = useState<DeckData[]>([]);
   const [loading, setLoading] = useState(true);
   const [editLoc, setEditLoc] = useState<Location | null>(null);
   const [editGroup, setEditGroup] = useState<LocationGroup | null>(null);
@@ -48,6 +57,7 @@ export default function LocationsPage() {
   const [locOpened, { open: openLoc, close: closeLoc }] = useDisclosure(false);
   const [deckOpened, { open: openDeckModal, close: closeDeckModal }] = useDisclosure(false);
   const [editDeckId, setEditDeckId] = useState<number | null>(null);
+  const [editingDeck, setEditingDeck] = useState<DeckData | null>(null);
   const [groupOpened, { open: openGroup, close: closeGroup }] = useDisclosure(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set(groups.map(g => g.id)));
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -176,25 +186,33 @@ export default function LocationsPage() {
   };
 
   const openCreateDeck = () => {
-    setEditDeckId(null); setName(''); setDescription(''); setLocGroupId(null);
+    setEditDeckId(null); setEditingDeck(null); setLocGroupId(null);
     closeTypePicker(); openDeckModal();
   };
 
-  const openEditDeck = (deck: DeckSummary) => {
-    setEditDeckId(deck.id); setName(deck.name); setDescription(deck.description || ''); setLocGroupId(deck.groupId ? String(deck.groupId) : null);
+  const openEditDeck = (deck: DeckData) => {
+    setEditDeckId(deck.id); setEditingDeck(deck); setLocGroupId(deck.groupId ? String(deck.groupId) : null);
     openDeckModal();
   };
 
-  const handleSaveDeck = async () => {
-    if (!name.trim()) return;
+  const handleSaveDeck = async (values: DeckFormValues) => {
+    if (!values.name.trim()) return;
     try {
       if (editDeckId) {
-        await api.decks.update(editDeckId, { name: name.trim(), description: description.trim() || null });
-        if (locGroupId !== null) {
-          await api.decks.setGroup(editDeckId, locGroupId ? Number(locGroupId) : null);
-        }
+        await api.decks.update(editDeckId, {
+          name: values.name.trim(), description: values.description.trim() || null,
+          deckType: values.deckType, commanderCardId: values.commanderCardId || null,
+          partnerCardId: values.partnerCardId || null, backgroundCardId: values.backgroundCardId || null,
+          cardId: values.cardId || null,
+        });
+        await api.decks.setGroup(editDeckId, locGroupId ? Number(locGroupId) : null);
       } else {
-        const deck = await api.decks.create({ name: name.trim(), description: description.trim() || null });
+        const deck = await api.decks.create({
+          name: values.name.trim(), description: values.description.trim() || null,
+          deckType: values.deckType, commanderCardId: values.commanderCardId || null,
+          partnerCardId: values.partnerCardId || null, backgroundCardId: values.backgroundCardId || null,
+          cardId: values.cardId || values.commanderCardId || undefined,
+        });
         if (locGroupId) {
           await api.decks.setGroup(deck.id, Number(locGroupId));
         }
@@ -244,7 +262,7 @@ export default function LocationsPage() {
     setDeleteId(null);
   };
 
-  const DeckCard = ({ deck }: { deck: DeckSummary }) => (
+  const DeckCard = ({ deck }: { deck: DeckData }) => (
     <Card withBorder radius={0} padding="sm">
       <Group justify="space-between">
         <Group gap="sm">
@@ -515,15 +533,18 @@ export default function LocationsPage() {
         <Button onClick={handleSaveLoc} fullWidth mt="md">{editLoc ? 'Save' : 'Create'}</Button>
       </Modal>
 
-      <Modal opened={deckOpened} onClose={closeDeckModal} title={editDeckId ? 'Edit Deck' : 'New Deck'} size="sm">
-        <TextInput label="Name" value={name} onChange={e => { const v = e.currentTarget.value; setName(v); }} required data-autofocus />
-        <TextInput label="Description (optional)" value={description} onChange={e => { const v = e.currentTarget.value; setDescription(v); }} mt="sm" />
-        <Select label="Group" placeholder="No group" data={[
-          { value: '', label: 'No group' },
-          ...groups.map(g => ({ value: String(g.id), label: g.name })),
-        ]} value={locGroupId} onChange={v => setLocGroupId(v)} clearable mt="sm" />
-        <Button onClick={handleSaveDeck} fullWidth mt="md">{editDeckId ? 'Save' : 'Create'}</Button>
-      </Modal>
+      <DeckFormModal opened={deckOpened} onClose={closeDeckModal}
+        title={editDeckId ? 'Edit Deck' : 'New Deck'}
+        saveLabel={editDeckId ? 'Save' : 'Create'}
+        initial={editingDeck ? {
+          name: editingDeck.name, description: editingDeck.description || '', cardId: editingDeck.cardId || '',
+          deckType: editingDeck.deckType || 'custom', commanderCardId: editingDeck.commanderCardId || '',
+          partnerCardId: editingDeck.partnerCardId || '', backgroundCardId: editingDeck.backgroundCardId || '',
+        } : undefined}
+        groups={groups.map(g => ({ value: String(g.id), label: g.name }))}
+        groupId={locGroupId}
+        onGroupChange={setLocGroupId}
+        onSave={handleSaveDeck} />
 
       <Modal opened={groupOpened} onClose={closeGroup} title={editGroup ? 'Edit Group' : 'Create Group'} size="sm">
         <TextInput label="Name" value={name} onChange={e => { const v = e.currentTarget.value; setName(v); }} required data-autofocus />

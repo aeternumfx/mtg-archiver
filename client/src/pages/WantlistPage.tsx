@@ -198,9 +198,11 @@ export default function WantlistPage() {
     return priceStr ? parseFloat(priceStr) : null;
   };
 
-  const getCardImage = (item: WantlistItem): Record<string, string> | null => {
+  const getCardImage = (item: WantlistItem): { imageUris: Record<string, string> | null; cardFaces?: Array<{ image_uris?: Record<string, string> }> | null; layout?: string | null } | null => {
     if (!item.cardId) return null;
-    return cardData[item.cardId]?.imageUris || null;
+    const c = cardData[item.cardId];
+    if (!c) return null;
+    return { imageUris: c.imageUris, cardFaces: c.cardFaces, layout: c.layout };
   };
 
   const cardNames = results.map(g => g.name);
@@ -238,7 +240,7 @@ export default function WantlistPage() {
               <Group key={item.id} p="sm" gap="sm" wrap="nowrap"
                 bg={idx % 2 === 1 ? 'var(--mantine-color-default-hover)' : undefined}>
                 <Box w={32} h={45} style={{ borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
-                  {item.cardId ? <CardThumb card={{ imageUris: getCardImage(item) }} /> : <GhostThumb name={item.cardName} />}
+                  {item.cardId ? <CardThumb card={getCardImage(item) ?? { imageUris: null }} /> : <GhostThumb name={item.cardName} />}
                 </Box>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <Text size="sm" fw={500} lineClamp={1}>{item.cardName}</Text>
@@ -285,8 +287,8 @@ export default function WantlistPage() {
             );
 
             return (
-              <CardGroup key={name} card={{ imageUris: getCardImage(rep) }}
-                thumb={rep.cardId ? <CardThumb card={{ imageUris: getCardImage(rep) }} /> : <GhostThumb name={name} />}
+              <CardGroup key={name} card={getCardImage(rep) ?? { imageUris: null }}
+                thumb={rep.cardId ? <CardThumb card={getCardImage(rep) ?? { imageUris: null }} /> : <GhostThumb name={name} />}
                 name={name} manaCost={null} typeLine={null}
                 isSingle={groupItems.length === 1} expanded={isExpanded} onToggle={() => toggleGroup(name)}
                 rightSection={<Badge size="sm" variant="light">{groupItems.length} {groupItems.length !== 1 ? 'cards' : 'card'}</Badge>}

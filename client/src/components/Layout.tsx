@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon, Menu, Avatar,
+  AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon, Menu, Avatar, Stack,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar, IconShieldLock, IconLogout, IconUser, IconChartBar, IconUsers, IconAdjustments, IconMessageCircle, IconEye, IconInfoCircle, IconRocket } from '@tabler/icons-react';
@@ -16,6 +16,7 @@ import { useAuth } from '../auth/AuthContext';
 import type { SyncStatus } from '../types';
 
 const navItems: Array<{ label: string; path: string; icon: any; badge?: string; tour: string }> = [
+  { label: 'Profile', path: '/profile', icon: IconUser, tour: 'nav-profile' },
   { label: 'Dashboard', path: '/dashboard', icon: IconHome, tour: 'nav-dashboard' },
   { label: 'Organize', path: '/organize', icon: IconSortDescending, tour: 'nav-organize' },
   { label: 'Add Cards', path: '/add', icon: IconPlus, tour: 'nav-add' },
@@ -129,20 +130,34 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <IconSettings size={18} />
               </ActionIcon>
             )}
-            <Menu shadow="md" width={200} position="bottom-end">
+            <Menu shadow="md" width={220} position="bottom-end">
               <Menu.Target>
                 <ActionIcon variant="light" radius="xl" size="md" style={{ cursor: 'pointer' }}>
-                  <Avatar radius="xl" size={26} color="blue">{user?.username?.[0]?.toUpperCase() ?? '?'}</Avatar>
+                  <Avatar radius="xl" size={26} color="blue" src={user?.avatar || undefined}>
+                    {user?.username?.[0]?.toUpperCase() ?? '?'}
+                  </Avatar>
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
                 <Menu.Label>
-                  <Group gap={6}>
-                    <IconUser size={14} />
-                    <span>{user?.username}</span>
-                    {isAdmin && <Badge size="xs" color="grape" variant="light">Admin</Badge>}
-                  </Group>
+                  <Stack gap={0} style={{ minWidth: 0 }}>
+                    <Group gap={6} wrap="nowrap">
+                      <IconUser size={14} />
+                      <Text fw={600} size="sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {user?.displayName || (user?.username ? `@${user.username}` : '')}
+                      </Text>
+                      {isAdmin && <Badge size="xs" color="grape" variant="light">Admin</Badge>}
+                    </Group>
+                    {user?.displayName && user?.username && user.displayName !== user.username && (
+                      <Text size="xs" c="dimmed" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        @{user.username}
+                      </Text>
+                    )}
+                  </Stack>
                 </Menu.Label>
+                <Menu.Item leftSection={<IconUser size={16} />} onClick={() => navigate('/profile')}>
+                  Profile
+                </Menu.Item>
                 {isAdmin && (
                   <Menu.Item leftSection={<IconShieldLock size={16} />} onClick={() => navigate('/admin')}>
                     Admin
@@ -193,7 +208,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Group gap={6} wrap="nowrap">
               <IconEye size={16} color="#fff" />
               <Text size="sm" fw={600} c="white">
-                Viewing as <b>{user.username}</b> — admin preview. Changes are made to this user's account.
+                Viewing as <b>@{user.username}</b> — admin preview. Changes are made to this user's account.
               </Text>
             </Group>
             <Button size="compact-xs" variant="white" color="red" onClick={exitImpersonation}>Exit preview</Button>

@@ -50,7 +50,7 @@ export function cardsByName(name: string): CatalogCardRow[] {
   ).all(name) as CatalogCardRow[];
 }
 
-export function localImageUris(cardId: string, imageUris: string | Record<string, string> | null | undefined): Record<string, string> | null {
+export function localImageUris(cardId: string, imageUris: string | Record<string, string> | null | undefined, faceIdx?: number): Record<string, string> | null {
   if (!imageUris) return null;
   let uris: Record<string, string>;
   if (typeof imageUris === 'string') {
@@ -64,7 +64,9 @@ export function localImageUris(cardId: string, imageUris: string | Record<string
   }
   const out: Record<string, string> = {};
   for (const key of Object.keys(uris)) {
-    out[key] = `/api/images/${cardId}/${key}`;
+    out[key] = faceIdx !== undefined
+      ? `/api/images/${cardId}/${key}/${faceIdx}?v=3`
+      : `/api/images/${cardId}/${key}?v=3`;
   }
   return out;
 }
@@ -81,9 +83,9 @@ export function localizeCardFaces(cardId: string, cardFaces: unknown): Array<Rec
   } else {
     faces = cardFaces as Array<{ image_uris?: unknown }>;
   }
-  return faces.map(f => ({
+  return faces.map((f, i) => ({
     ...f,
-    image_uris: localImageUris(cardId, f.image_uris as string | Record<string, string> | undefined),
+    image_uris: localImageUris(cardId, f.image_uris as string | Record<string, string> | undefined, i),
   }));
 }
 

@@ -37,28 +37,35 @@ organizeRouter.post('/resolve', (req, res) => {
   try {
     const history: Array<{ id: number; locId: number; destId: number | null }> = [];
 
+    const resolveItem = (row: { id: number; location_id: number; destination_id: number | null; card_id: string; quantity: number }) => {
+      const locId = row.location_id;
+      const destId = row.destination_id;
+      history.push({ id: row.id, locId, destId });
+      sqlite.prepare(`UPDATE collection_items SET location_id = destination_id, destination_id = NULL WHERE id = ?`).run(row.id);
+      sqlite.prepare(`INSERT INTO movement_history (item_id, card_id, card_name, action, from_location_id, to_location_id, quantity) VALUES (?, ?, '', 'resolved', ?, ?, ?)`)
+        .run(row.id, row.card_id, locId, destId, row.quantity);
+
+      // If this item was scheduled to fill a deck's required (ghost) card, the
+      // card has now arrived at the deck location: attach it to the deck and
+      // remove the ghost.
+      const reqRow = sqlite.prepare('SELECT id, deck_id FROM deck_required_cards WHERE fill_item_id = ?').get(row.id) as { id: number; deck_id: number } | undefined;
+      if (reqRow) {
+        sqlite.prepare(`UPDATE collection_items SET deck_id = ? WHERE id = ?`).run(reqRow.deck_id, row.id);
+        sqlite.prepare(`DELETE FROM deck_required_cards WHERE id = ?`).run(reqRow.id);
+      }
+    };
+
     sqlite.transaction(() => {
       if (all) {
         const rows = sqlite.prepare(
-          'SELECT id, location_id, destination_id FROM collection_items WHERE destination_id IS NOT NULL AND destination_id != location_id',
+          'SELECT id, location_id, destination_id, card_id, quantity FROM collection_items WHERE destination_id IS NOT NULL AND destination_id != location_id',
         ).all() as any[];
-        for (const row of rows) {
-          history.push({ id: row.id, locId: row.location_id, destId: row.destination_id });
-          const item = sqlite.prepare(
-            'SELECT card_id, quantity, location_id FROM collection_items WHERE id = ?',
-          ).get(row.id) as any;
-          sqlite.prepare(`UPDATE collection_items SET location_id = destination_id, destination_id = NULL WHERE id = ?`).run(row.id);
-          sqlite.prepare(`INSERT INTO movement_history (item_id, card_id, card_name, action, from_location_id, to_location_id, quantity) VALUES (?, ?, '', 'resolved', ?, ?, ?)`)
-            .run(row.id, item.card_id, row.locId, row.destination_id, item.quantity);
-        }
+        for (const row of rows) resolveItem(row);
       } else if (itemIds && Array.isArray(itemIds)) {
         for (const id of itemIds) {
           const row = sqlite.prepare('SELECT id, location_id, destination_id, card_id, quantity FROM collection_items WHERE id = ? AND destination_id IS NOT NULL AND destination_id != location_id').get(id) as any;
           if (!row) continue;
-          history.push({ id: row.id, locId: row.location_id, destId: row.destination_id });
-          sqlite.prepare(`UPDATE collection_items SET location_id = destination_id, destination_id = NULL WHERE id = ?`).run(id);
-          sqlite.prepare(`INSERT INTO movement_history (item_id, card_id, card_name, action, from_location_id, to_location_id, quantity) VALUES (?, ?, '', 'resolved', ?, ?, ?)`)
-            .run(id, row.card_id, row.location_id, row.destination_id, row.quantity);
+          resolveItem(row);
         }
       }
     })();

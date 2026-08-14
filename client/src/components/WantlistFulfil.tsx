@@ -17,7 +17,7 @@ export interface WantlistFulfilItem {
 
 interface InternalCopy {
   id: number; locationId: number; condition: string | null; foil: number; quantity: number;
-  setName: string; setCode: string; collectorNumber: string;
+  setName: string; setCode: string; collectorNumber: string; destinationId: number | null;
 }
 
 export function WantlistFulfilActions({ item, locations, hasInternal, onDone, currentLocationId }: {
@@ -33,6 +33,7 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone, cu
   const [internalCopies, setInternalCopies] = useState<InternalCopy[]>([]);
   const [internalLoading, setInternalLoading] = useState(false);
   const [fulfilling, setFulfilling] = useState(false);
+  const [overwriteCopy, setOverwriteCopy] = useState<InternalCopy | null>(null);
 
   const hereId = currentLocationId != null ? currentLocationId : (item.destinationId ?? null);
   const hereName = locations.find(l => l.id === hereId)?.name || 'this location';
@@ -96,12 +97,22 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone, cu
         .map((i: any) => ({
           id: i.id, locationId: i.locationId, condition: i.condition, foil: i.foil, quantity: i.quantity,
           setName: i.card.setName, setCode: i.card.setCode, collectorNumber: i.card.collectorNumber,
+          destinationId: i.destinationId ?? null,
         })));
     } catch { setInternalCopies([]); }
     setInternalLoading(false);
   };
 
   const handleFulfilInternal = async (copy: InternalCopy, mode: 'now' | 'schedule') => {
+    const destId = currentLocationId != null ? currentLocationId : (item.destinationId ?? null);
+    if (mode === 'schedule' && copy.destinationId != null && copy.destinationId !== destId) {
+      setOverwriteCopy(copy);
+      return;
+    }
+    await doFulfilInternal(copy, mode);
+  };
+
+  const doFulfilInternal = async (copy: InternalCopy, mode: 'now' | 'schedule') => {
     setFulfilling(true);
     try {
       if (currentLocationId != null) {
@@ -120,7 +131,7 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone, cu
         ? (mode === 'now' ? `Filled here in ${hereName}` : `Scheduled to move to ${hereName}`)
         : (item.destinationId ? 'Move scheduled to fulfil this want' : 'Wantlist entry fulfilled');
       notifications.show({ title: 'Fulfilled', message: msg, color: 'green' });
-      closeInternal(); onDone();
+      closeInternal(); setOverwriteCopy(null); onDone();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     } finally {
@@ -205,6 +216,16 @@ export function WantlistFulfilActions({ item, locations, hasInternal, onDone, cu
             ))}
           </ScrollArea>
         )}
+      </Modal>
+
+      <Modal opened={overwriteCopy !== null} onClose={() => setOverwriteCopy(null)} title="Pending Move Detected" size="sm" centered>
+        <Text size="sm" mb="md">
+          {overwriteCopy?.setName || 'This card'} already has a scheduled move. Overwrite it with the new destination?
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setOverwriteCopy(null)}>Cancel</Button>
+          <Button color="red" onClick={() => { if (overwriteCopy) doFulfilInternal(overwriteCopy, 'schedule'); }}>Overwrite</Button>
+        </Group>
       </Modal>
     </>
   );

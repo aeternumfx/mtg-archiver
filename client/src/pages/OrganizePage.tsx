@@ -20,7 +20,7 @@ interface PendingItem {
 
 interface CollectionCard {
   id: number; cardId: string; quantity: number; destinationId: number | null;
-  card: { name: string; setName: string; setCode: string; collectorNumber: string; imageUris: Record<string, string> | null; };
+  card: { name: string; setName: string; setCode: string; collectorNumber: string; imageUris: Record<string, string> | null; cardFaces?: Array<{ image_uris?: Record<string, string> }> | null; layout?: string | null };
 }
 
 interface MovementEntry {
@@ -80,7 +80,7 @@ export default function OrganizePage() {
       .then(r => r.json())
       .then(data => {
         const cards: CollectionCard[] = (data.groups || []).flatMap((g: any) =>
-          (g.items || []).map((i: any) => ({ id: i.id, cardId: i.cardId, quantity: i.quantity, destinationId: i.destinationId, card: { name: i.card.name, setName: i.card.setName, setCode: i.card.setCode, collectorNumber: i.card.collectorNumber, imageUris: i.card.imageUris } })));
+          (g.items || []).map((i: any) => ({ id: i.id, cardId: i.cardId, quantity: i.quantity, destinationId: i.destinationId, card: { name: i.card.name, setName: i.card.setName, setCode: i.card.setCode, collectorNumber: i.card.collectorNumber, imageUris: i.card.imageUris, cardFaces: i.card.cardFaces, layout: i.card.layout } })));
         setLocCards(cards);
       }).catch(() => setLocCards([])).finally(() => setLocCardsLoading(false));
   }, [srcLoc]);

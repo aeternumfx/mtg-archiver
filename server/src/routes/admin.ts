@@ -6,7 +6,7 @@ import multer from 'multer';
 import { requireAdmin, type AuthenticatedRequest } from '../auth/middleware';
 import {
   listUsers, getUserById, getUserByUsername, getUserPasswordHash, createUser, setUserPassword, updateUser,
-  permanentlyDeleteUser, deleteAllUsersExcept, generateTempPassword, adminStats,
+  permanentlyDeleteUser, deleteAllUsersExcept, generateTempPassword, adminStats, usernameExistsCaseInsensitive,
 } from '../auth/users';
 import { verifyPassword } from '../auth/password';
 import { sessionCountsByUser, deleteUserSessions, createImpersonationSession, sessionCookieOptions, IMPERSONATE_COOKIE } from '../auth/sessions';
@@ -19,7 +19,7 @@ import { isUserSetupDone, resetUserTour, isInstanceSetupDone, markInstanceSetupD
 import { createBackupZip } from '../services/backup';
 import { appVersion, autoUpdateAvailable, checkForUpdates, runAutoUpdate } from '../services/updates';
 import { restoreFromBackup } from '../services/restore';
-import { dataDir } from '../db/paths';
+import { dataDir, userDbPath } from '../db/paths';
 
 const uploadsDir = path.join(dataDir, '.uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -156,9 +156,14 @@ adminRouter.get('/users', (_req, res) => {
     activeSessions: counts.get(u.id) ?? 0,
     pendingTour: (u.role === 'user' || u.role === 'moderator') && !isUserSetupDone(u.id),
     demo: !!u.demo,
+    storageBytes: userDbBytes(u.id),
   }));
   res.json(users);
 });
+
+function userDbBytes(userId: number): number {
+  try { return fs.statSync(userDbPath(userId)).size; } catch { return 0; }
+}
 
 adminRouter.get('/setup-status', (req, res) => {
   res.json({ done: isInstanceSetupDone(), adminUsername: (req as AuthenticatedRequest).user!.username });
@@ -247,17 +252,24 @@ adminRouter.post('/users', (req: AuthenticatedRequest, res) => {
   if (!/^[a-zA-Z0-9._-]{3,32}$/.test(clean)) {
     return res.status(400).json({ error: 'Username must be 3-32 characters (letters, numbers, . _ -)' });
   }
-  if (getUserByUsername(clean)) {
+  if (usernameExistsCaseInsensitive(clean)) {
     return res.status(409).json({ error: 'Username already exists' });
   }
 
   const tempPassword = generateTempPassword();
   const userRole = role === 'admin' ? 'admin' : role === 'moderator' ? 'moderator' : 'user';
-  const user = createUser(clean, tempPassword, userRole, true);
-  res.status(201).json({
-    user: { id: user.id, username: user.username, role: user.role, mustChangePassword: !!user.mustChangePassword },
-    tempPassword,
-  });
+  try {
+    const user = createUser(clean, tempPassword, userRole, true);
+    res.status(201).json({
+      user: { id: user.id, username: user.username, role: user.role, mustChangePassword: !!user.mustChangePassword },
+      tempPassword,
+    });
+  } catch (err: any) {
+    if (String(err?.code ?? err?.message ?? '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+    throw err;
+  }
 });
 
 adminRouter.post('/users/:id/reset-password', (req, res) => {
@@ -302,11 +314,21 @@ adminRouter.patch('/users/:id', (req, res) => {
     if (!/^[a-zA-Z0-9._-]{3,32}$/.test(clean)) {
       return res.status(400).json({ error: 'Username must be 3-32 characters (letters, numbers, . _ -)' });
     }
-    const existing = getUserByUsername(clean);
-    if (existing && existing.id !== id) {
+    const conflicting = getUserByUsername(clean);
+    if (conflicting && conflicting.id !== id) {
       return res.status(409).json({ error: 'Username already exists' });
     }
-    updateUser(id, { username: clean });
+    if (usernameExistsCaseInsensitive(clean) && user.username.toLowerCase() !== clean.toLowerCase()) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+    try {
+      updateUser(id, { username: clean });
+    } catch (err: any) {
+      if (String(err?.code ?? err?.message ?? '').includes('UNIQUE')) {
+        return res.status(409).json({ error: 'Username already exists' });
+      }
+      throw err;
+    }
   }
   updateUser(id, {
     disabled: disabled !== undefined ? !!disabled : undefined,
@@ -344,6 +366,9 @@ adminRouter.post('/users/:id/impersonate', (req: AuthenticatedRequest, res) => {
       mustChangePassword: false,
       impersonating: true,
       impersonatedBy: actor.username,
+      isDemo: !!target.demo,
+      displayName: target.displayName,
+      avatar: target.avatar,
     },
   });
 });

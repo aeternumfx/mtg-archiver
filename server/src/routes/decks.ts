@@ -164,6 +164,7 @@ decksRouter.get('/:id/cards', (req, res) => {
     id: schema.collectionItems.id,
     cardId: schema.collectionItems.cardId,
     locationId: schema.collectionItems.locationId,
+    destinationId: schema.collectionItems.destinationId,
     foil: schema.collectionItems.foil,
     condition: schema.collectionItems.condition,
     quantity: schema.collectionItems.quantity,
@@ -175,7 +176,7 @@ decksRouter.get('/:id/cards', (req, res) => {
     createdAt: schema.collectionItems.createdAt,
   })
     .from(schema.collectionItems)
-    .where(eq(schema.collectionItems.deckId, deckId))
+    .where(and(eq(schema.collectionItems.deckId, deckId), sql`${schema.collectionItems.destinationId} IS NULL`))
     .all();
 
   const cards = cardsByIds(items.map(i => i.cardId));
@@ -253,10 +254,32 @@ decksRouter.post('/:id/link', (req, res) => {
 });
 
 decksRouter.get('/:id/required', (req, res) => {
-  const cards = db.select().from(schema.deckRequiredCards)
+  const rows = db.select({
+    id: schema.deckRequiredCards.id,
+    deckId: schema.deckRequiredCards.deckId,
+    cardId: schema.deckRequiredCards.cardId,
+    cardName: schema.deckRequiredCards.cardName,
+    setCode: schema.deckRequiredCards.setCode,
+    collectorNumber: schema.deckRequiredCards.collectorNumber,
+    quantity: schema.deckRequiredCards.quantity,
+    fillItemId: schema.deckRequiredCards.fillItemId,
+    createdAt: schema.deckRequiredCards.createdAt,
+  })
+    .from(schema.deckRequiredCards)
     .where(eq(schema.deckRequiredCards.deckId, Number(req.params.id)))
     .orderBy(schema.deckRequiredCards.createdAt)
     .all();
+
+  const cards = rows.map(r => ({
+    ...r,
+    fillSourceName: r.fillItemId
+      ? (sqlite.prepare(`
+          SELECT l.name FROM collection_items ci
+          JOIN locations l ON l.id = ci.location_id
+          WHERE ci.id = ?
+        `).get(r.fillItemId) as { name: string } | undefined)?.name ?? null
+      : null,
+  }));
   res.json(cards);
 });
 
@@ -320,22 +343,44 @@ decksRouter.post('/:id/required/:reqId/fill', (req, res) => {
     sqlite.transaction(() => {
       const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, itemId)).get();
       if (!item) throw new Error('Collection item not found');
-      const req = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
+      const reqRow = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
 
-      db.update(schema.collectionItems)
-        .set({ deckId, destinationId: schedule ? deckLoc.id : null })
-        .where(eq(schema.collectionItems.id, itemId))
-        .run();
+      if (schedule) {
+        // Schedule the move from the item's current location to the deck location.
+        // The card stays in its source location (full colour, scheduled move) and
+        // the deck keeps showing the ghost with a pending move until resolved.
+        db.update(schema.collectionItems)
+          .set({ destinationId: deckLoc.id })
+          .where(eq(schema.collectionItems.id, itemId))
+          .run();
 
-      db.delete(schema.deckRequiredCards)
-        .where(eq(schema.deckRequiredCards.id, reqId))
-        .run();
+        if (reqRow) {
+          // Mark the ghost as being filled by this collection item.
+          db.update(schema.deckRequiredCards)
+            .set({ fillItemId: itemId })
+            .where(eq(schema.deckRequiredCards.id, reqId))
+            .run();
+          const wl = findGhostWantlist(reqRow.id, reqRow.cardName);
+          if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+        }
+      } else {
+        // Fill now: the card belongs to the deck immediately.
+        db.update(schema.collectionItems)
+          .set({ deckId, destinationId: null })
+          .where(eq(schema.collectionItems.id, itemId))
+          .run();
 
-      const wl = req ? findGhostWantlist(req.id, req.cardName) : undefined;
-      if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+        if (reqRow) {
+          db.delete(schema.deckRequiredCards)
+            .where(eq(schema.deckRequiredCards.id, reqId))
+            .run();
+          const wl = findGhostWantlist(reqRow.id, reqRow.cardName);
+          if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+        }
+      }
     })();
 
-    res.json({ message: 'Card added to deck from collection' });
+    res.json({ message: schedule ? 'Move scheduled from collection to deck' : 'Card added to deck from collection' });
   } catch (err: any) {
     fail(res, err);
   }

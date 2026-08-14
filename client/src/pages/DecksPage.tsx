@@ -1,9 +1,8 @@
 import { useState, useEffect, Component, type ReactNode, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput, Textarea,
+  Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput,
   LoadingOverlay, Box, Paper, Badge, ActionIcon, Tooltip, ScrollArea, Select, Switch, NumberInput, SegmentedControl, Collapse,
-  Image, HoverCard,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
@@ -12,6 +11,7 @@ import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
 import { CardThumb, SetSymbol, GhostThumb } from '../components/CardDisplay';
+import { DeckFormModal, DECK_TYPES, CommanderThumb, DeckArtwork, type DeckFormValues } from '../components/DeckFormModal';
 import { CardGroup } from '../components/CardGroup';
 import { useUndo } from '../components/UndoToasts';
 
@@ -32,19 +32,6 @@ interface Deck {
   cardCount: number;
 }
 
-const DECK_TYPES = [
-  { value: 'custom', label: 'Custom' },
-  { value: 'standard', label: 'Standard' },
-  { value: 'modern', label: 'Modern' },
-  { value: 'pioneer', label: 'Pioneer' },
-  { value: 'legacy', label: 'Legacy' },
-  { value: 'vintage', label: 'Vintage' },
-  { value: 'pauper', label: 'Pauper' },
-  { value: 'commander', label: 'Commander' },
-  { value: 'brawl', label: 'Brawl' },
-  { value: 'duel', label: 'Duel Commander' },
-];
-
 interface RequiredCard {
   id: number;
   deckId: number;
@@ -53,6 +40,8 @@ interface RequiredCard {
   setCode: string | null;
   collectorNumber: string | null;
   quantity: number;
+  fillItemId: number | null;
+  fillSourceName: string | null;
 }
 
 type PickEntry = {
@@ -118,8 +107,8 @@ export default function DecksPage() {
   const [createOpened, { open: openCreate, close: closeCreate }] = useDisclosure(false);
   const [editOpened, { open: openEdit, close: closeEdit }] = useDisclosure(false);
   const [artworkOpened, { open: openArtwork, close: closeArtwork }] = useDisclosure(false);
-  const [form, setForm] = useState({ name: '', description: '', cardId: '', deckType: 'custom', commanderCardId: '' as string, partnerCardId: '' as string, backgroundCardId: '' as string });
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingDeck, setEditingDeck] = useState<Deck | null>(null);
   const [artworkDeckId, setArtworkDeckId] = useState<number | null>(null);
   const [artworkSearch, setArtworkSearch] = useState('');
   const [artworkResults, setArtworkResults] = useState<ScryfallCard[]>([]);
@@ -140,10 +129,6 @@ export default function DecksPage() {
   const [collectionPickOpened, { open: openCollectionPick, close: closeCollectionPick }] = useDisclosure(false);
   const [legality, setLegality] = useState<{ format: string; legal: boolean; totalCards: number; issues: Array<{ type: string; cardName: string; detail: string }>; cardStatuses: Array<{ name: string; status: string }> } | null>(null);
   const [zoneNames, setZoneNames] = useState<{ commander: string | null; second: string | null }>({ commander: null, second: null });
-  const [commanderSearch, setCommanderSearch] = useState('');
-  const [commanderResults, setCommanderResults] = useState<ScryfallCard[]>([]);
-  const [commanderPickOpened, { open: openCommanderPick, close: closeCommanderPick }] = useDisclosure(false);
-  const [commanderPickMode, setCommanderPickMode] = useState<'commander' | 'partner' | 'background'>('commander');
   const [legalityModalOpened, setLegalityModalOpened] = useState(false);
   const [deckSearch, setDeckSearch] = useState('');
   const [deckTypeFilter, setDeckTypeFilter] = useState<string | null>(null);
@@ -166,6 +151,7 @@ export default function DecksPage() {
   const [fillOpened, { open: openFill, close: closeFill }] = useDisclosure(false);
   const [pickAddingId, setPickAddingId] = useState<number | null>(null);
   const [schedConfirm, setSchedConfirm] = useState<{ item: CollectionItem; mode: 'now' | 'schedule'; source: 'link' | 'fill' } | null>(null);
+  const [schedOverwrite, setSchedOverwrite] = useState<{ items: CollectionItem[]; destId: number } | null>(null);
 
   const loadDecks = async () => {
     setLoading(true);
@@ -224,14 +210,14 @@ export default function DecksPage() {
       const isSmart = /^[a-z]{2,4}\s*\d+/i.test(q) || /^s:\S+\s+cn:\S+$/i.test(q);
       try {
         if (isSmart) {
-          const cards = await api.cards.find(q);
+          const cards = await api.cards.find(q, { counts: true });
           const groups: Record<string, ScryfallCard[]> = {};
           for (const c of cards) {
             if (!groups[c.name]) groups[c.name] = [];
             groups[c.name].push(c as unknown as ScryfallCard);
           }
           const names = Object.keys(groups);
-          setAddCardResults(names.map(n => ({
+          const result = names.map(n => ({
             id: groups[n][0]?.id ?? n,
             name: n,
             typeLine: groups[n][0]?.typeLine ?? null,
@@ -239,15 +225,20 @@ export default function DecksPage() {
             cmc: groups[n][0]?.cmc ?? null,
             colors: groups[n][0]?.colors ?? null,
             imageUris: groups[n][0]?.imageUris ?? null,
+            cardFaces: groups[n][0]?.cardFaces ?? null,
+            layout: groups[n][0]?.layout ?? null,
             printings: groups[n].length,
             firstPrinting: null,
             lastPrinting: null,
-          })));
+          }));
+          const counts = await api.collection.counts(names).catch(() => ({})) as Record<string, number>;
+          result.forEach(r => { (r as any).collectionCount = counts[r.name] || 0; });
+          setAddCardResults(result);
           setAddPrintings(groups as unknown as Record<string, ScryfallCard[]>);
           setAddPrintingsTotal({});
           setAddExpanded(new Set());
         } else {
-          const res = await api.cards.grouped(q, 1);
+          const res = await api.cards.grouped(q, 1, undefined, { counts: true });
           setAddCardResults(res.data);
           setAddPrintings({});
           setAddPrintingsTotal({});
@@ -268,17 +259,6 @@ export default function DecksPage() {
     }, 300);
     return () => clearTimeout(timeout);
   }, [artworkSearch]);
-
-  useEffect(() => {
-    if (commanderSearch.trim().length < 2) { setCommanderResults([]); return; }
-    const timeout = setTimeout(async () => {
-      try {
-        const res = await api.cards.find(commanderSearch);
-        setCommanderResults(res.slice(0, 20) as unknown as ScryfallCard[]);
-      } catch { setCommanderResults([]); }
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [commanderSearch]);
 
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -306,7 +286,7 @@ export default function DecksPage() {
   const loadPrintings = async (name: string, page: number) => {
     setAddLoadingPrintings(prev => new Set(prev).add(name));
     try {
-      const res = await api.cards.printingsPaged(name, page, PRINTINGS_PAGE_SIZE);
+      const res = await api.cards.printingsPaged(name, page, PRINTINGS_PAGE_SIZE, { counts: true });
       setAddPrintings(prev => {
         const existing = prev[name] || [];
         const merged = page === 1 ? res.data : [...existing, ...res.data];
@@ -522,18 +502,17 @@ export default function DecksPage() {
     }
   };
 
-  const handleCreate = async () => {
-    if (!form.name.trim()) return;
+  const handleCreate = async (values: DeckFormValues) => {
+    if (!values.name.trim()) return;
     try {
       const created = await api.decks.create({
-        name: form.name.trim(), description: form.description.trim() || undefined,
-        deckType: form.deckType, commanderCardId: form.commanderCardId || null,
-        partnerCardId: form.partnerCardId || null, backgroundCardId: form.backgroundCardId || null,
-        cardId: form.commanderCardId || undefined,
+        name: values.name.trim(), description: values.description.trim() || undefined,
+        deckType: values.deckType, commanderCardId: values.commanderCardId || null,
+        partnerCardId: values.partnerCardId || null, backgroundCardId: values.backgroundCardId || null,
+        cardId: values.cardId || values.commanderCardId || undefined,
       });
       notifications.show({ title: 'Created', message: 'Deck created', color: 'green' });
       closeCreate();
-      setForm({ name: '', description: '', cardId: '', deckType: 'custom', commanderCardId: '', partnerCardId: '', backgroundCardId: '' });
       loadDecks();
       setSelectedDeck({ ...created, cardCount: 0 });
       loadDeckCards(created.id);
@@ -542,14 +521,14 @@ export default function DecksPage() {
     }
   };
 
-  const handleEdit = async () => {
-    if (!editingId || !form.name.trim()) return;
+  const handleEdit = async (values: DeckFormValues) => {
+    if (!editingId || !values.name.trim()) return;
     try {
       const updated = await api.decks.update(editingId, {
-        name: form.name.trim(), description: form.description.trim() || null,
-        deckType: form.deckType, commanderCardId: form.commanderCardId || null,
-        partnerCardId: form.partnerCardId || null, backgroundCardId: form.backgroundCardId || null,
-        cardId: (form.commanderCardId && !selectedDeck?.cardId) ? form.commanderCardId : undefined,
+        name: values.name.trim(), description: values.description.trim() || null,
+        deckType: values.deckType, commanderCardId: values.commanderCardId || null,
+        partnerCardId: values.partnerCardId || null, backgroundCardId: values.backgroundCardId || null,
+        cardId: values.cardId || undefined,
       });
       notifications.show({ title: 'Updated', message: 'Deck updated', color: 'green' });
       closeEdit();
@@ -626,38 +605,14 @@ export default function DecksPage() {
 
   const openEditDialog = (deck: Deck) => {
     setEditingId(deck.id);
-    setForm({ name: deck.name, description: deck.description || '', cardId: deck.cardId || '', deckType: deck.deckType || 'custom', commanderCardId: deck.commanderCardId || '', partnerCardId: deck.partnerCardId || '', backgroundCardId: deck.backgroundCardId || '' });
+    setEditingDeck(deck);
     openEdit();
   };
 
   const openCreateDialog = () => {
-    setForm({ name: '', description: '', cardId: '', deckType: 'custom', commanderCardId: '', partnerCardId: '', backgroundCardId: '' });
+    setEditingId(null);
+    setEditingDeck(null);
     openCreate();
-  };
-
-  const openCommanderPickFor = (mode: 'commander' | 'partner' | 'background') => {
-    setCommanderPickMode(mode);
-    setCommanderSearch('');
-    setCommanderResults([]);
-    openCommanderPick();
-  };
-
-  const handlePickCommander = (card: ScryfallCard) => {
-    if (commanderPickMode === 'partner') {
-      setForm(f => ({ ...f, partnerCardId: card.id }));
-    } else if (commanderPickMode === 'background') {
-      setForm(f => ({ ...f, backgroundCardId: card.id }));
-    } else {
-      setForm(f => ({
-        ...f,
-        commanderCardId: card.id,
-        partnerCardId: f.partnerCardId === card.id ? '' : f.partnerCardId,
-        backgroundCardId: f.backgroundCardId === card.id ? '' : f.backgroundCardId,
-      }));
-    }
-    closeCommanderPick();
-    setCommanderSearch('');
-    setCommanderResults([]);
   };
 
   const openArtworkDialog = (deckId: number) => {
@@ -723,12 +678,22 @@ export default function DecksPage() {
 
   const handleScheduleMove = async () => {
     if (!moveDestLoc || moveItems.length === 0) return;
+    const destId = Number(moveDestLoc);
+    if (moveItems.some(i => i.destinationId != null)) {
+      setSchedOverwrite({ items: moveItems, destId });
+      return;
+    }
+    await doScheduleMove(moveItems, destId);
+  };
+
+  const doScheduleMove = async (items: CollectionItem[], destId: number) => {
     try {
-      for (const item of moveItems) {
-        await api.collection.update(item.id, { destinationId: Number(moveDestLoc) } as any);
+      for (const item of items) {
+        await api.collection.update(item.id, { destinationId: destId } as any);
       }
-      notifications.show({ title: 'Scheduled', message: `${moveItems.length} card(s) scheduled for move`, color: 'green' });
+      notifications.show({ title: 'Scheduled', message: `${items.length} card(s) scheduled for move`, color: 'green' });
       closeMove();
+      setSchedOverwrite(null);
       if (selectedDeck) loadDeckCards(selectedDeck.id);
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -880,6 +845,11 @@ export default function DecksPage() {
                           <Text size="sm" fw={500}>{group.name}</Text>
                           <Text size="xs" c="dimmed">{group.printings || 1} printing{(group.printings || 1) !== 1 ? 's' : ''}</Text>
                         </div>
+                        {typeof (group as any).collectionCount === 'number' && (group as any).collectionCount > 0 && (
+                          <Badge size="sm" variant="light" color="blue" leftSection={<IconArchive size={12} />}>
+                            {(group as any).collectionCount} in collection
+                          </Badge>
+                        )}
                       </Group>
                       <Collapse in={isExpanded}>
                         {addLoadingPrintings.has(group.name) && <Text size="xs" c="dimmed" p="xs">Loading printings...</Text>}
@@ -889,6 +859,9 @@ export default function DecksPage() {
                             <SetSymbol code={c.setCode} name={c.setName} size={12} />
                             <Text size="xs" c="dimmed">#{c.collectorNumber}</Text>
                             <Text size="xs" c="dimmed" style={{ flex: 1 }}>{c.setName}</Text>
+                            {typeof (c as any).collectionCount === 'number' && (c as any).collectionCount > 0 && (
+                              <Badge size="xs" variant="light" color="blue">{`${(c as any).collectionCount} in collection`}</Badge>
+                            )}
                             <Button size="compact-xs" variant="light" color="green" leftSection={<IconArchive size={12} />}
                               onClick={() => handleOpenCollectionPick(c)} loading={addingCardId === c.id}>
                               Collection
@@ -1206,13 +1179,16 @@ export default function DecksPage() {
                   const isSecondGhost = req.cardId
                     ? req.cardId === selectedDeck.partnerCardId || req.cardId === selectedDeck.backgroundCardId
                     : (!!zoneNames.second && nameL === zoneNames.second.toLowerCase());
+                  const pendingFill = req.fillItemId != null;
                   return (
-                  <Paper key={req.id} withBorder mb={2} radius={0} opacity={0.55}
-                    style={isCmdGhost
-                      ? { border: '2px solid var(--mantine-color-yellow-6)', boxShadow: '0 0 10px rgba(230,180,0,0.25)', filter: 'grayscale(0.4)' }
-                      : isSecondGhost
-                        ? { border: '2px solid var(--mantine-color-teal-6)', filter: 'grayscale(0.4)' }
-                        : { filter: 'grayscale(0.6)' }}>
+                  <Paper key={req.id} withBorder mb={2} radius={0} opacity={pendingFill ? 0.7 : 0.55}
+                    style={pendingFill
+                      ? { border: '2px solid var(--mantine-color-violet-6)', filter: 'grayscale(0.4)' }
+                      : isCmdGhost
+                        ? { border: '2px solid var(--mantine-color-yellow-6)', boxShadow: '0 0 10px rgba(230,180,0,0.25)', filter: 'grayscale(0.4)' }
+                        : isSecondGhost
+                          ? { border: '2px solid var(--mantine-color-teal-6)', filter: 'grayscale(0.4)' }
+                          : { filter: 'grayscale(0.6)' }}>
                     <Group p="sm" gap="sm" wrap="nowrap">
                       <GhostThumb name={req.cardName} cardId={req.cardId} />
                       <div style={{ flex: 1 }}>
@@ -1229,9 +1205,13 @@ export default function DecksPage() {
                       {isCmdGhost && <Badge size="sm" color="yellow" variant="filled">Commander</Badge>}
                       {isSecondGhost && <Badge size="sm" color="teal" variant="filled">Partner/Background</Badge>}
                       <Badge size="sm" variant="light">{req.quantity}x</Badge>
-                      <Button size="compact-xs" variant="light" color="blue" onClick={() => openFillDialog(req)}>
-                        Fill from Collection
-                      </Button>
+                      {pendingFill ? (
+                        <Badge size="sm" variant="light" color="violet">Move scheduled{req.fillSourceName ? ` from ${req.fillSourceName}` : ''}</Badge>
+                      ) : (
+                        <Button size="compact-xs" variant="light" color="blue" onClick={() => openFillDialog(req)}>
+                          Fill from Collection
+                        </Button>
+                      )}
                       <ActionIcon variant="subtle" size="sm" onClick={() => openGhostMove(req)}><IconArrowRight size={14} /></ActionIcon>
                       <ActionIcon variant="subtle" color="red" size="sm" onClick={() => handleRemoveRequired(req.id)}><IconTrash size={14} /></ActionIcon>
                     </Group>
@@ -1281,48 +1261,16 @@ export default function DecksPage() {
         </>
       )}
 
-      <Modal opened={createOpened} onClose={closeCreate} title="New Deck" size="md" centered>
-        <TextInput label="Name" value={form.name} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, name: v })); }} mb="sm" required />
-        <Textarea label="Description" value={form.description} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, description: v })); }} mb="sm" />
-        <Select label="Deck Type" data={DECK_TYPES} value={form.deckType} onChange={v => setForm(f => ({ ...f, deckType: v || 'custom' }))} mb="sm" />
-        <Group justify="flex-end"><Button variant="default" onClick={closeCreate}>Cancel</Button><Button onClick={handleCreate}>Create</Button></Group>
-      </Modal>
+      <DeckFormModal opened={createOpened} onClose={closeCreate} title="New Deck" saveLabel="Create"
+        onSave={handleCreate} />
 
-      <Modal opened={editOpened} onClose={closeEdit} title="Edit Deck" size="md" centered>
-        <TextInput label="Name" value={form.name} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, name: v })); }} mb="sm" required />
-        <Textarea label="Description" value={form.description} onChange={e => { const v = e.currentTarget.value; setForm(f => ({ ...f, description: v })); }} mb="sm" />
-        <Select label="Deck Type" data={DECK_TYPES} value={form.deckType} onChange={v => setForm(f => ({ ...f, deckType: v || 'custom' }))} mb="sm" />
-        {form.deckType === 'commander' && (
-          <CommanderArea form={form} setForm={setForm} openPicker={openCommanderPickFor} />
-        )}
-        <Group justify="flex-end"><Button variant="default" onClick={closeEdit}>Cancel</Button><Button onClick={handleEdit}>Save</Button></Group>
-      </Modal>
-
-      <Modal opened={commanderPickOpened} onClose={closeCommanderPick}
-        title={commanderPickMode === 'partner' ? 'Choose Partner Commander' : commanderPickMode === 'background' ? 'Choose Background' : 'Choose Commander'}
-        size="md" centered>
-        <TextInput placeholder="Search for a legendary creature..." value={commanderSearch} onChange={e => setCommanderSearch(e.currentTarget.value)} leftSection={<IconSearch size={14} />} mb="sm" autoFocus />
-        <ScrollArea h={350}>
-          {commanderResults.length > 0 ? (
-            commanderResults.map(c => (
-              <Group key={c.id} p="xs" gap="sm" wrap="nowrap" style={{ cursor: 'pointer', borderRadius: 4 }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--mantine-color-default-hover)')}
-                onMouseLeave={e => (e.currentTarget.style.background = '')}
-                onClick={() => handlePickCommander(c)}
-              >
-                <Box w={32} h={45}><CardThumb card={c} /></Box>
-                <div style={{ flex: 1 }}>
-                  <Text size="sm" fw={500}>{c.name}</Text>
-                  <Group gap={4}>
-                    <SetSymbol code={c.setCode} name={c.setName} size={12} />
-                    <Text size="xs" c="dimmed">{c.typeLine}</Text>
-                  </Group>
-                </div>
-              </Group>
-            ))
-          ) : commanderSearch.trim().length >= 2 && <Text c="dimmed" ta="center" py="xl">No cards found</Text>}
-        </ScrollArea>
-      </Modal>
+      <DeckFormModal opened={editOpened} onClose={closeEdit} title="Edit Deck" saveLabel="Save"
+        initial={editingDeck ? {
+          name: editingDeck.name, description: editingDeck.description || '', cardId: editingDeck.cardId || '',
+          deckType: editingDeck.deckType || 'custom', commanderCardId: editingDeck.commanderCardId || '',
+          partnerCardId: editingDeck.partnerCardId || '', backgroundCardId: editingDeck.backgroundCardId || '',
+        } : undefined}
+        onSave={handleEdit} />
 
       <Modal opened={artworkOpened} onClose={closeArtwork} title="Choose Deck Artwork" size="lg" centered>
         <TextInput placeholder="Search for a card..." value={artworkSearch} onChange={e => setArtworkSearch(e.currentTarget.value)} leftSection={<IconSearch size={14} />} mb="sm" />
@@ -1371,6 +1319,16 @@ export default function DecksPage() {
           ) : (
             <Button leftSection={<IconBolt size={14} />} onClick={handleMove}>Move Now</Button>
           )}
+        </Group>
+      </Modal>
+
+      <Modal opened={schedOverwrite !== null} onClose={() => setSchedOverwrite(null)} title="Pending Move Detected" size="sm" centered>
+        <Text size="sm" mb="md">
+          {schedOverwrite?.items.length} card(s) already have a scheduled move. Overwrite them with the new destination?
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setSchedOverwrite(null)}>Cancel</Button>
+          <Button color="red" onClick={() => { if (schedOverwrite) doScheduleMove(schedOverwrite.items, schedOverwrite.destId); }}>Overwrite</Button>
         </Group>
       </Modal>
 
@@ -1494,34 +1452,6 @@ export default function DecksPage() {
     </ErrorBoundary>
   );
 }
-
-function CommanderThumb({ card, size = 48 }: { card: ScryfallCard | null; size?: number }) {
-  const src = card?.imageUris?.normal || card?.imageUris?.large || card?.imageUris?.small || null;
-  const largeSrc = card?.imageUris?.large || card?.imageUris?.normal || null;
-  const w = Math.round(size * (63 / 88));
-  const thumb = (
-    <Group gap="sm" wrap="nowrap" align="center">
-      <Box w={w} h={size} style={{ borderRadius: 6, overflow: 'hidden', background: '#1a1a2e', flexShrink: 0, position: 'relative', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' }}>
-        {src
-          ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
-          : <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', fontSize: Math.round(size * 0.5), opacity: 0.3 }}>?</span>}
-      </Box>
-      {card && <Text size="sm" fw={500} lh={1.2}>{card.name}</Text>}
-    </Group>
-  );
-  if (!largeSrc) return thumb;
-  return (
-    <HoverCard width={320} shadow="md" withArrow openDelay={150}>
-      <HoverCard.Target>
-        <div style={{ display: 'inline-flex' }}>{thumb}</div>
-      </HoverCard.Target>
-      <HoverCard.Dropdown p={0} style={{ border: 'none', background: 'transparent', pointerEvents: 'none' }}>
-        <Image src={largeSrc} w={320} h={448} fit="contain" radius="sm" />
-      </HoverCard.Dropdown>
-    </HoverCard>
-  );
-}
-
 function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
   deck: Deck;
   deckCards: CollectionItem[];
@@ -1771,104 +1701,5 @@ function DeckCommandZone({ deck, deckCards, requiredCards, onAssign }: {
         </Group>
       </Modal>
     </>
-  );
-}
-
-function CommanderSlot({ label, card, hasCard, onChoose, onRemove }: {
-  label: string; card: ScryfallCard | null; hasCard: boolean; onChoose: () => void; onRemove: () => void;
-}) {
-  return (
-    <Group gap="xs" mb="xs" wrap="nowrap" align="center">
-      <Text size="xs" c="dimmed" w={84} style={{ flexShrink: 0 }}>{label}</Text>
-      {hasCard ? (
-        card ? (
-          <>
-            <CommanderThumb card={card} size={40} />
-            <Button size="compact-xs" variant="light" onClick={onChoose}>Change</Button>
-            <Button size="compact-xs" variant="subtle" color="red" onClick={onRemove}>Remove</Button>
-          </>
-        ) : (
-          <Text size="xs" c="dimmed">Loading...</Text>
-        )
-      ) : (
-        <Button size="compact-xs" variant="outline" color="gray" leftSection={<IconPlus size={12} />} onClick={onChoose}>
-          Add card
-        </Button>
-      )}
-    </Group>
-  );
-}
-
-function CommanderArea({ form, setForm, openPicker }: {
-  form: { commanderCardId: string; partnerCardId: string; backgroundCardId: string };
-  setForm: (f: (prev: any) => any) => void;
-  openPicker: (mode: 'commander' | 'partner' | 'background') => void;
-}) {
-  const [commander, setCommander] = useState<ScryfallCard | null>(null);
-  const [partner, setPartner] = useState<ScryfallCard | null>(null);
-  const [background, setBackground] = useState<ScryfallCard | null>(null);
-  useEffect(() => {
-    if (form.commanderCardId) api.cards.get(form.commanderCardId).then(setCommander).catch(() => setCommander(null));
-    else setCommander(null);
-  }, [form.commanderCardId]);
-  useEffect(() => {
-    if (form.partnerCardId) api.cards.get(form.partnerCardId).then(setPartner).catch(() => setPartner(null));
-    else setPartner(null);
-  }, [form.partnerCardId]);
-  useEffect(() => {
-    if (form.backgroundCardId) api.cards.get(form.backgroundCardId).then(setBackground).catch(() => setBackground(null));
-    else setBackground(null);
-  }, [form.backgroundCardId]);
-
-  const cmdText = commander?.oracleText || '';
-  const showPartner = /(^|\n)\s*Partner/i.test(cmdText);
-  const showBackground = /Choose a Background/i.test(cmdText);
-
-  const identitySet = new Set<string>();
-  [commander, partner, background].forEach(c => c?.colorIdentity?.forEach(x => identitySet.add(x)));
-  const identity = [...identitySet].sort();
-
-  return (
-    <Box mb="md">
-      <Text size="sm" fw={500} mb={4}>Command Zone</Text>
-      <CommanderSlot label="Commander" card={commander} hasCard={!!form.commanderCardId}
-        onChoose={() => openPicker('commander')}
-        onRemove={() => setForm(f => ({ ...f, commanderCardId: '' }))} />
-      {showPartner && (
-        <CommanderSlot label="Partner" card={partner} hasCard={!!form.partnerCardId}
-          onChoose={() => openPicker('partner')}
-          onRemove={() => setForm(f => ({ ...f, partnerCardId: '' }))} />
-      )}
-      {showBackground && (
-        <CommanderSlot label="Background" card={background} hasCard={!!form.backgroundCardId}
-          onChoose={() => openPicker('background')}
-          onRemove={() => setForm(f => ({ ...f, backgroundCardId: '' }))} />
-      )}
-      <Group gap={6} mt="xs">
-        <Text size="xs" c="dimmed">Color identity:</Text>
-        {identity.length === 0
-          ? <Text size="xs" c="dimmed">—</Text>
-          : identity.map(c => (
-            <Badge key={c} size="sm" variant="light" styles={{ label: { color: '#fff' } }} style={{ background: CID_COLORS[c] || '#666' }}>{c}</Badge>
-          ))}
-      </Group>
-    </Box>
-  );
-}
-
-function DeckArtwork({ cardId, size = 200 }: { cardId: string; size?: number }) {  const [src, setSrc] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    if (!cardId) return;
-    setSrc(null); setLoaded(false);
-    api.cards.get(cardId).then(card => {
-      setSrc(card?.imageUris?.art_crop || card?.imageUris?.large || card?.imageUris?.normal || null);
-    }).catch(() => setSrc(null));
-  }, [cardId]);
-  return (
-    <div style={{ width: '100%', height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', position: 'relative', overflow: 'hidden' }}>
-      {src && <img src={src} onLoad={() => setLoaded(true)} style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity 0.2s' }} alt="" />}
-      {!loaded && <span style={{ fontSize: 48, opacity: 0.15 }}>🃏</span>}
-    </div>
   );
 }

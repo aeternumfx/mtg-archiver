@@ -49,6 +49,8 @@ export interface AuthUser {
   impersonating?: boolean;
   impersonatedBy?: string | null;
   isDemo?: boolean;
+  displayName?: string | null;
+  avatar?: string | null;
 }
 
 export interface SystemSettings {
@@ -114,10 +116,15 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ currentPassword, newPassword }),
       }),
+    profile: (data: { displayName?: string | null; avatarCardId?: string | null; avatarFace?: number | null }) =>
+      request<{ user: AuthUser }>('/api/auth/profile', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
   },
 
   admin: {
-    users: () => request<Array<{ id: number; username: string; role: string; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null; activeSessions: number; pendingTour: boolean; demo: boolean }>>('/api/admin/users'),
+    users: () => request<Array<{ id: number; username: string; displayName: string | null; avatar: string | null; role: string; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null; activeSessions: number; pendingTour: boolean; demo: boolean; storageBytes: number }>>('/api/admin/users'),
     setupStatus: () => request<{ done: boolean; adminUsername: string }>('/api/admin/setup-status'),
     completeSetup: (data: { domain: string; adminContactName: string; adminContactEmail: string; demoEnabled: boolean; currentPassword?: string; newPassword?: string }) =>
       request<{ ok: boolean; settings: SystemSettings }>('/api/admin/complete-setup', { method: 'POST', body: JSON.stringify(data) }),
@@ -231,11 +238,13 @@ export const api = {
   sets: () => request<Array<{ setCode: string; setName: string; hasBoosters: number; setType: string }>>('/api/cards/sets'),
 
   cards: {
-    find: (q: string) => request<CardResult[]>(`/api/cards/find?q=${encodeURIComponent(q)}`),
-    grouped: (q: string, page = 1, filters?: Record<string, string>) => {
+    find: (q: string, opts?: { counts?: boolean }) =>
+      request<CardResult[]>(`/api/cards/find?q=${encodeURIComponent(q)}${opts?.counts ? '&counts=1' : ''}`),
+    grouped: (q: string, page = 1, filters?: Record<string, string>, opts?: { counts?: boolean }) => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       params.set('page', String(page));
+      if (opts?.counts) params.set('counts', '1');
       if (filters) for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
       return request<PaginatedResponse<GroupedCard>>(`/api/cards/grouped?${params}`);
     },
@@ -244,8 +253,8 @@ export const api = {
     setCards: (setCode: string) => request<ScryfallCard[]>(`/api/cards/set/${setCode}`),
     get: (id: string) => request<ScryfallCard>(`/api/cards/${id}`),
     printings: (name: string) => request<ScryfallCard[]>(`/api/cards/printings?name=${encodeURIComponent(name)}`),
-    printingsPaged: (name: string, page = 1, pageSize = 50) =>
-      request<PaginatedResponse<ScryfallCard>>(`/api/cards/printings?name=${encodeURIComponent(name)}&page=${page}&pageSize=${pageSize}`),
+    printingsPaged: (name: string, page = 1, pageSize = 50, opts?: { counts?: boolean }) =>
+      request<PaginatedResponse<ScryfallCard>>(`/api/cards/printings?name=${encodeURIComponent(name)}&page=${page}&pageSize=${pageSize}${opts?.counts ? '&counts=1' : ''}`),
   },
 
   locations: {
@@ -442,6 +451,8 @@ export const api = {
     splitCopy: (id: number, destinationId: number | null) =>
       request<CollectionItem>(`/api/collection/${id}/split-copy`, { method: 'POST', body: JSON.stringify({ destinationId }) }),
     names: () => request<string[]>('/api/collection/names'),
+    counts: (names: string[]) =>
+      request<Record<string, number>>(`/api/collection/counts?names=${encodeURIComponent(JSON.stringify(names))}`),
     move: (items: Array<{ id: number; quantity?: number }>, destinationLocationId: number) =>
       request<{ moved: Array<{ id: number; cardId: string; quantity: number }> }>(
         '/api/collection/move',

@@ -8,6 +8,7 @@ const FALLBACK_240 = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
 export interface CardImageData {
   imageUris?: Record<string, string> | null;
   cardFaces?: Array<{ image_uris?: Record<string, string> }> | null;
+  layout?: string | null;
 }
 
 export interface CardTagData {
@@ -16,6 +17,18 @@ export interface CardTagData {
   fullArt?: number | boolean | null;
   textless?: number | boolean | null;
   layout?: string | null;
+}
+
+const DOUBLE_FACED_LAYOUTS = new Set([
+  'transform',
+  'modal_dfc',
+  'art_series',
+  'reversible_card',
+  'double_faced_token',
+]);
+
+function isDoubleFaced(card: CardImageData): boolean {
+  return DOUBLE_FACED_LAYOUTS.has(card.layout ?? '');
 }
 
 const FOIL_OVERLAY =
@@ -38,22 +51,25 @@ function FoilOverlay() {
 
 export function CardThumb({ card, foil }: { card: CardImageData; foil?: boolean }) {  const uris = card.imageUris;
   const faces = card.cardFaces;
-  const srcSmall = uris?.small || uris?.art_crop || null;
-  const srcLarge = uris?.large || uris?.normal || null;
   const faceImages = faces && faces.length > 1
     ? faces.map(f => ({
         small: f.image_uris?.small || f.image_uris?.art_crop || null,
         large: f.image_uris?.large || f.image_uris?.normal || null,
       }))
     : [];
-  const showFaces = faceImages.length > 1;
+  const showFaces = faceImages.length > 1 && isDoubleFaced(card);
+  const frontFace = faceImages[0] ?? null;
+  const srcSmall = uris?.small || uris?.art_crop || (!showFaces ? frontFace?.small : null) || null;
+  const srcLarge = uris?.large || uris?.normal || (!showFaces ? frontFace?.large : null) || null;
 
   if (!srcSmall && !srcLarge && !showFaces) return null;
 
+  const thumbFaces = showFaces ? faceImages.slice(0, 2) : [];
+
   const thumb = (
     <Group gap={2} wrap="nowrap" style={{ position: 'relative', display: 'inline-flex' }}>
-      {showFaces ? faceImages.map((fi, i) => (
-        <Image key={i} src={fi.small || fi.large} w={20} h={28} fit="cover" radius="xs" fallbackSrc={FALLBACK_32} />
+      {showFaces ? thumbFaces.map((fi, i) => (
+        <Image key={i} src={fi.small || fi.large} w={15} h={21} fit="cover" radius="xs" fallbackSrc={FALLBACK_32} />
       )) : (
         <Image src={srcSmall || srcLarge} w={32} h={45} fit="cover" radius="xs" style={{ cursor: 'default' }} fallbackSrc={FALLBACK_32} />
       )}
@@ -66,7 +82,9 @@ export function CardThumb({ card, foil }: { card: CardImageData; foil?: boolean 
       {showFaces ? (
         <Group gap={4} wrap="nowrap">
           {faceImages.map((fi, i) => (
-            <Image key={i} src={fi.large || fi.small} w={240} h={335} fit="contain" radius="sm" fallbackSrc={FALLBACK_240} />
+            <Image key={i} src={fi.large || fi.small} w={240} h={335}
+              fit={(card.layout ?? '') === 'art_series' ? 'cover' : 'contain'}
+              radius="sm" fallbackSrc={FALLBACK_240} />
           ))}
         </Group>
       ) : (
@@ -90,11 +108,20 @@ const ghostCache = new Map<string, { small: string | null; large: string | null 
 
 function ghostImageFrom(card: any): { small: string | null; large: string | null } | null {
   const uris = card?.imageUris;
-  if (!uris) return null;
-  return {
-    small: uris.small || uris.art_crop || null,
-    large: uris.large || uris.normal || null,
-  };
+  if (uris) {
+    return {
+      small: uris.small || uris.art_crop || null,
+      large: uris.large || uris.normal || null,
+    };
+  }
+  const face0 = card?.cardFaces?.[0]?.image_uris;
+  if (face0) {
+    return {
+      small: face0.small || face0.art_crop || null,
+      large: face0.large || face0.normal || null,
+    };
+  }
+  return null;
 }
 
 export function GhostThumb({ name, cardId, card }: {

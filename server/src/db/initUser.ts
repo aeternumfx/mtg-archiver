@@ -81,6 +81,7 @@ export function initUserSchema(sqlite: DatabaseType) {
       set_code TEXT,
       collector_number TEXT,
       quantity INTEGER NOT NULL DEFAULT 1,
+      fill_item_id INTEGER REFERENCES collection_items(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
@@ -259,6 +260,9 @@ export function initUserSchema(sqlite: DatabaseType) {
   if (!mhCols.some(c => c.name === 'undone')) {
     sqlite.exec("ALTER TABLE movement_history ADD COLUMN undone INTEGER NOT NULL DEFAULT 0");
   }
+
+  const reqCols = (sqlite.pragma('table_info(deck_required_cards)') as Array<{ name: string }>).map(c => c.name);
+  if (!reqCols.includes('fill_item_id')) sqlite.exec('ALTER TABLE deck_required_cards ADD COLUMN fill_item_id INTEGER REFERENCES collection_items(id)');
 
   const indexes: Array<[string, string]> = [
     ['idx_ci_location', 'CREATE INDEX IF NOT EXISTS idx_ci_location ON collection_items(location_id)'],

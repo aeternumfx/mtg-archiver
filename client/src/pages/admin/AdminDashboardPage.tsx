@@ -141,7 +141,7 @@ export default function AdminDashboardPage() {
               <Table.Tbody>
                 {stats.storage.perUser.map(u => (
                   <Table.Tr key={u.userId}>
-                    <Table.Td>{u.username}</Table.Td>
+                    <Table.Td>@{u.username}</Table.Td>
                     <Table.Td>
                       <Progress value={(u.bytes / maxUserBytes) * 100} size="sm" color={u.bytes > 100 * 1024 * 1024 ? 'orange' : 'blue'} />
                     </Table.Td>
@@ -219,7 +219,7 @@ export default function AdminDashboardPage() {
           <Table.Tbody>
             {feed.map(ev => (
               <Table.Tr key={ev.id}>
-                <Table.Td style={{ whiteSpace: 'nowrap' }}>{new Date(ev.ts).toLocaleTimeString()}</Table.Td>
+                <Table.Td style={{ whiteSpace: 'nowrap' }}>{new Date(ev.ts).toLocaleString()}</Table.Td>
                 <Table.Td>{ev.username ?? '—'}</Table.Td>
                 <Table.Td><Badge size="xs" variant="light" color="gray">{ev.method}</Badge></Table.Td>
                 <Table.Td style={{ maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.path}</Table.Td>

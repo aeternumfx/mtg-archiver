@@ -20,12 +20,21 @@ interface WantlistGhost {
   tradeId?: number | null; notes?: string | null;
 }
 
+interface IncomingMove {
+  id: number; cardId: string | null; locationId: number; destinationId: number | null;
+  foil: number; condition: string | null; quantity: number; notes: string | null;
+  sourceName: string;
+  card: { name: string; setName: string; setCode: string; collectorNumber: string; imageUris: Record<string, string> | null; cardFaces?: Array<{ image_uris?: Record<string, string> }> | null; layout?: string | null };
+}
+
 interface CollectionGroup {
   name: string;
   typeLine: string | null;
   manaCost: string | null;
   cmc: number | null;
   imageUris: Record<string, string> | null;
+  cardFaces?: Array<{ image_uris?: Record<string, string> }> | null;
+  layout?: string | null;
   setCodes: string[];
   totalQty: number;
   totalValue: number;
@@ -92,8 +101,8 @@ const ItemRow = memo(function ItemRow({ row, selected, locations, onToggle, onEd
         </Badge>
       </Tooltip>
       {item.destinationId ? (
-        <Tooltip label={`Move pending to ${locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}`}>
-          <Badge size="xs" variant="light" color="green" w={80} ta="center" style={{ textAlign: 'center' }}>→ Scheduled</Badge>
+        <Tooltip label={`Move pending from ${locations.find(l => l.id === item.locationId)?.name || `#${item.locationId}`} to ${locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}`}>
+          <Badge size="xs" variant="light" color="green" w={80} ta="center" style={{ textAlign: 'center' }}>→ {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}</Badge>
         </Tooltip>
       ) : (
         <Text size="xs" w={80} c="dimmed" ta="center">-</Text>
@@ -154,6 +163,30 @@ const GhostRow = memo(function GhostRow({ w, locations, hasInternal, onDone, cur
   );
 });
 
+const IncomingMoveRow = memo(function IncomingMoveRow({ m, locations }: { m: IncomingMove; locations: Location[] }) {
+  const destName = locations.find(l => l.id === m.destinationId)?.name || (m.destinationId ? `#${m.destinationId}` : '');
+  return (
+    <Group p="sm" gap="sm" wrap="nowrap" opacity={0.55} style={{ filter: 'grayscale(0.6)' }}>
+      <Box w={32} h={45} style={{ flexShrink: 0 }}>
+        <GhostThumb name={m.card?.name} cardId={m.cardId} />
+      </Box>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Text size="sm" fw={500}>{m.card?.name || 'Unknown'}</Text>
+        {m.card?.setCode ? (
+          <Group gap={4}>
+            <SetSymbol code={m.card.setCode} name={m.card.setName} size={12} />
+            <Text size="xs" c="dimmed">{m.card.setCode.toUpperCase()} #{m.card.collectorNumber}</Text>
+          </Group>
+        ) : null}
+      </div>
+      <Badge size="xs" variant="light" color="violet">Scheduled move</Badge>
+      <Badge size="xs" variant="light" color="blue">{m.sourceName}</Badge>
+      <IconArrowRight size={14} opacity={0.4} />
+      <Badge size="xs" variant="light" color="green">{destName || '?'}</Badge>
+    </Group>
+  );
+});
+
 const copyKeyFor = (item: CollectionItem, copyIdx: number) => `${item.id}-${copyIdx}`;
 
 const expandItems = (items: CollectionItem[]): CopyRow[] => {
@@ -193,9 +226,11 @@ export default function CollectionPage() {
   const [destValue, setDestValue] = useState<string | null>(null);
   const [bulkScheduleOpened, { open: openBulkSchedule, close: closeBulkSchedule }] = useDisclosure(false);
   const [bulkDestValue, setBulkDestValue] = useState<string | null>(null);
+  const [overwriteConfirm, setOverwriteConfirm] = useState<null | { mode: 'single'; source: 'dest' | 'edit'; item: CollectionItem; destId: number | null } | { mode: 'bulk'; destId: number }>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [wantGhosts, setWantGhosts] = useState<WantlistGhost[]>([]);
+  const [incomingMoves, setIncomingMoves] = useState<IncomingMove[]>([]);
   const [ghostPage, setGhostPage] = useState(1);
   const [ghostTotalPages, setGhostTotalPages] = useState(1);
   const [ghostLoading, setGhostLoading] = useState(false);
@@ -253,6 +288,7 @@ export default function CollectionPage() {
       const res = await authFetch(`/api/collection/grouped?${params}`);
       const data = await res.json();
       setGroups(data.groups || []);
+      setIncomingMoves(data.incoming || []);
       setTotalPages(data.totalPages || 1);
     } catch {
       notifications.show({ title: 'Error', message: 'Failed to load collection', color: 'red' });
@@ -359,11 +395,20 @@ export default function CollectionPage() {
     if (!ghostByName[w.cardName]) ghostByName[w.cardName] = [];
     ghostByName[w.cardName].push(w);
   }
+  // Incoming scheduled moves: cards coming into this location, shown as ghosts
+  // tagged with their source location.
+  const incomingByName: Record<string, IncomingMove[]> = {};
+  for (const m of incomingMoves) {
+    const name = m.card?.name || 'Unknown';
+    if (!incomingByName[name]) incomingByName[name] = [];
+    incomingByName[name].push(m);
+  }
   const serverNames = new Set(groups.map(g => g.name));
   const ghostOnlyNames = Object.keys(ghostByName).filter(n => !serverNames.has(n));
+  const incomingOnlyNames = Object.keys(incomingByName).filter(n => !serverNames.has(n) && !ghostByName[n]);
 
   const expandableGroupNames = groups
-    .filter(g => expandItems(g.items).length + (ghostByName[g.name]?.length || 0) > 1)
+    .filter(g => expandItems(g.items).length + (ghostByName[g.name]?.length || 0) + (incomingByName[g.name]?.length || 0) > 1)
     .map(g => g.name);
   const allExpanded = expandableGroupNames.length > 0 && expandableGroupNames.every(n => expanded.has(n));
 
@@ -458,10 +503,20 @@ export default function CollectionPage() {
 
   const handleSaveDest = async () => {
     if (!destItem) return;
+    const destId = destValue ? Number(destValue) : null;
+    if (destItem.destinationId && destItem.destinationId !== destId) {
+      setOverwriteConfirm({ mode: 'single', source: 'dest', item: destItem, destId });
+      return;
+    }
+    await doSaveDest(destItem, destId);
+  };
+
+  const doSaveDest = async (item: CollectionItem, destId: number | null) => {
     try {
-      await api.collection.splitCopy(destItem.id, destValue ? Number(destValue) : null);
-      notifications.show({ title: 'Scheduled', message: destValue ? 'Move scheduled' : 'Destination cleared', color: 'green' });
+      await api.collection.splitCopy(item.id, destId);
+      notifications.show({ title: 'Scheduled', message: destId ? 'Move scheduled' : 'Destination cleared', color: 'green' });
       closeDest();
+      setOverwriteConfirm(null);
       loadGroups();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -471,6 +526,19 @@ export default function CollectionPage() {
   const handleScheduleSelected = async () => {
     if (!bulkDestValue) return;
     const destLocId = Number(bulkDestValue);
+    const byId = new Map(allItems.map(i => [i.id, i]));
+    const pendingCount = [...selectedKeys].filter(key => {
+      const item = byId.get(Number(key.split('-')[0]));
+      return !!item && item.destinationId != null;
+    }).length;
+    if (pendingCount > 0) {
+      setOverwriteConfirm({ mode: 'bulk', destId: destLocId });
+      return;
+    }
+    await doBulkSchedule(destLocId);
+  };
+
+  const doBulkSchedule = async (destLocId: number) => {
     try {
       for (const key of selectedKeys) {
         const itemId = Number(key.split('-')[0]);
@@ -480,6 +548,7 @@ export default function CollectionPage() {
       setSelectedKeys(new Set());
       closeBulkSchedule();
       setBulkDestValue(null);
+      setOverwriteConfirm(null);
       loadGroups();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -516,17 +585,31 @@ export default function CollectionPage() {
   const handleSaveEdit = async () => {
     if (!editItem) return;
     try {
-      await api.collection.update(editItem.id, {
+      const destId = editDestLoc ? Number(editDestLoc) : null;
+      if (editItem.destinationId && editItem.destinationId !== destId) {
+        setOverwriteConfirm({ mode: 'single', source: 'edit', item: editItem, destId });
+        return;
+      }
+      await doSaveEditDest(editItem.id, destId);
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    }
+  };
+
+  const doSaveEditDest = async (itemId: number, destId: number | null) => {
+    try {
+      await api.collection.update(itemId, {
         quantity: editForm.quantity,
         foil: editForm.foil ? 1 : 0,
         condition: editForm.condition || null,
         purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null,
         packOpened: editForm.packOpened ? 1 : 0,
         notes: editForm.notes || null,
-        destinationId: editDestLoc ? Number(editDestLoc) : null,
+        destinationId: destId,
       } as any);
       notifications.show({ title: 'Updated', message: 'Item updated', color: 'green' });
       closeEdit();
+      setOverwriteConfirm(null);
       loadGroups();
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
@@ -850,8 +933,9 @@ export default function CollectionPage() {
         {groups.map(group => {
           const rows = expandItems(group.items);
           const ghosts = ghostByName[group.name] || [];
+          const incoming = incomingByName[group.name] || [];
 
-          if (rows.length + ghosts.length === 1) {
+          if (rows.length + ghosts.length + incoming.length === 1) {
             if (rows.length === 1) {
               const row = rows[0];
               return (
@@ -863,6 +947,9 @@ export default function CollectionPage() {
                       onToggle={handleSelect} onEdit={openEditDialog} onMove={handleMoveOne}
                       onOpenDest={openDestDialog} onDelete={handleDeleteItem} />
                   </Group>
+                  {incoming.map(m => (
+                    <IncomingMoveRow key={`incoming-${m.id}`} m={m} locations={locations} />
+                  ))}
                 </CardGroup>
               );
             }
@@ -873,11 +960,14 @@ export default function CollectionPage() {
                 thumb={<GhostThumb name={ghost.cardName} cardId={ghost.cardId} />}
               >
                 <GhostRow w={ghost} locations={locations} hasInternal={collectionNames.has(ghost.cardName)} onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
+                {incoming.map(m => (
+                  <IncomingMoveRow key={`incoming-${m.id}`} m={m} locations={locations} />
+                ))}
               </CardGroup>
             );
           }
 
-          const isExpanded = ghosts.length > 0 ? true : expanded.has(group.name);
+          const isExpanded = ghosts.length > 0 || incoming.length > 0 ? true : expanded.has(group.name);
           return (
             <CardGroup key={group.name} card={group} name={group.name} manaCost={group.manaCost} typeLine={group.typeLine}
               isSingle={false} expanded={isExpanded} onToggle={() => toggleExpand(group.name)}
@@ -888,6 +978,7 @@ export default function CollectionPage() {
                     <NumberFormatter value={group.totalValue} prefix="$" decimalScale={2} fixedDecimalScale />
                   </Badge>
                   {ghosts.length > 0 && <Badge size="sm" variant="light" color="teal">{ghosts.length} wanted</Badge>}
+                  {incoming.length > 0 && <Badge size="sm" variant="light" color="violet">{incoming.length} incoming</Badge>}
                   {selectedInGroup(group.items) && (
                     <Badge size="sm" variant="filled" color="blue">{rows.filter(r => selectedKeys.has(r.key)).length} selected</Badge>
                   )}
@@ -924,6 +1015,9 @@ export default function CollectionPage() {
                   <GhostRow key={`ghost-${w.id}`} w={w} locations={locations}
                     hasInternal={collectionNames.has(w.cardName)}
                     onDone={() => loadWantGhosts(ghostPage)} currentLocationId={selectedLoc ? Number(selectedLoc) : null} />
+                ))}
+                {incoming.map(m => (
+                  <IncomingMoveRow key={`incoming-${m.id}`} m={m} locations={locations} />
                 ))}
               </Box>
             </CardGroup>
@@ -973,6 +1067,44 @@ export default function CollectionPage() {
           <Group justify="center" mt="md">
             <Pagination total={ghostTotalPages} value={ghostPage} onChange={p => { setGhostPage(p); loadWantGhosts(p); }} size="sm" />
           </Group>
+        )}
+
+        {incomingOnlyNames.length > 0 && (
+          <>
+            <Group mt="lg" mb="sm" gap="xs">
+              <Badge size="sm" color="violet" variant="light">Scheduled moves</Badge>
+              <Text size="sm" c="dimmed">Cards on their way to this location</Text>
+            </Group>
+            {incomingOnlyNames.map(name => {
+              const moves = incomingByName[name];
+              const rep = moves[0];
+              const thumb = <GhostThumb name={name} cardId={rep.cardId} />;
+              if (moves.length === 1) {
+                return (
+                  <CardGroup key={`incoming-${name}`} card={{} as CollectionGroup} name={name} manaCost={null} typeLine={null}
+                    isSingle expanded={false} onToggle={() => {}}
+                    thumb={thumb}
+                  >
+                    <IncomingMoveRow m={moves[0]} locations={locations} />
+                  </CardGroup>
+                );
+              }
+              return (
+                <CardGroup key={`incoming-${name}`} card={{} as CollectionGroup} name={name} manaCost={null} typeLine={null}
+                  isSingle={false} expanded onToggle={() => {}}
+                  thumb={thumb}
+                  rightSection={<Badge size="sm" variant="light" color="violet">{moves.length} incoming</Badge>}
+                  style={{ opacity: 0.7 }}
+                >
+                  <Box px="sm" pb="xs">
+                    {moves.map(m => (
+                      <IncomingMoveRow key={`incoming-${m.id}`} m={m} locations={locations} />
+                    ))}
+                  </Box>
+                </CardGroup>
+              );
+            })}
+          </>
         )}
 
         {totalPages > 1 && (
@@ -1037,6 +1169,26 @@ export default function CollectionPage() {
         <Group justify="flex-end">
           <Button variant="default" onClick={closeBulkSchedule}>Cancel</Button>
           <Button color="teal" onClick={handleScheduleSelected} disabled={!bulkDestValue}>Schedule</Button>
+        </Group>
+      </Modal>
+
+      <Modal opened={overwriteConfirm !== null} onClose={() => setOverwriteConfirm(null)} title="Pending Move Detected" size="sm" centered>
+        <Text size="sm" mb="md">
+          {overwriteConfirm?.mode === 'single'
+            ? `${overwriteConfirm.item.card.name} already has a scheduled move. Overwrite it with the new destination?`
+            : 'Some selected card(s) already have a scheduled move. Overwrite them with the new destination?'}
+        </Text>
+        <Group justify="flex-end">
+          <Button variant="default" onClick={() => setOverwriteConfirm(null)}>Cancel</Button>
+          <Button color="red" onClick={() => {
+            if (overwriteConfirm?.mode === 'single' && overwriteConfirm.source === 'dest') {
+              doSaveDest(overwriteConfirm.item, overwriteConfirm.destId);
+            } else if (overwriteConfirm?.mode === 'single' && overwriteConfirm.source === 'edit') {
+              doSaveEditDest(overwriteConfirm.item.id, overwriteConfirm.destId);
+            } else if (overwriteConfirm?.mode === 'bulk') {
+              doBulkSchedule(overwriteConfirm.destId);
+            }
+          }}>Overwrite</Button>
         </Group>
       </Modal>
 

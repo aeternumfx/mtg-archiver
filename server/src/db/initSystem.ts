@@ -63,6 +63,12 @@ export function initSystemSchema(sqlite: DatabaseType) {
   if (!userCols.includes('demo')) {
     sqlite.exec('ALTER TABLE users ADD COLUMN demo INTEGER NOT NULL DEFAULT 0');
   }
+  if (!userCols.includes('display_name')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN display_name TEXT');
+  }
+  if (!userCols.includes('avatar')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
+  }
 
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS sessions (

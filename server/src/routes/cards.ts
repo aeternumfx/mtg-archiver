@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { catalogDb, schema } from '../db';
+import { catalogDb, schema, sqlite } from '../db';
 import { like, or, and, sql, eq, asc, desc } from 'drizzle-orm';
 import { localImageUris, localizeCardFaces } from '../services/cards';
 
@@ -16,6 +16,23 @@ function parseQuery(q: string): { type: 'setnum' | 'scryfall' | 'name'; set?: st
 }
 
 const NOT_ARENA = sql`(${schema.scryfallCards.setCode} NOT LIKE 'y%' AND ${schema.scryfallCards.setCode} != 'hbg' AND ${schema.scryfallCards.collectorNumber} NOT LIKE 'A-%')`;
+
+// Attaches `collectionCount` (total qty in the user's collection) per card id.
+function attachCollectionCounts(cards: Array<{ id: string }>) {
+  const ids = cards.map(c => c.id).filter(Boolean);
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(',');
+  const countRows = sqlite.prepare(
+    `SELECT ci.card_id as cardId, SUM(ci.quantity) as total
+     FROM collection_items ci
+     WHERE ci.card_id IN (${placeholders})
+     GROUP BY ci.card_id`
+  ).all(...ids) as Array<{ cardId: string; total: number }>;
+  const byId = new Map(countRows.map(r => [r.cardId, r.total]));
+  for (const c of cards) {
+    (c as any).collectionCount = byId.get(c.id) || 0;
+  }
+}
 
 cardsRouter.get('/find', (req, res) => {
   const q = (req.query.q as string ?? '').trim();
@@ -38,6 +55,7 @@ cardsRouter.get('/find', (req, res) => {
     imageUris: schema.scryfallCards.imageUris,
     prices: schema.scryfallCards.prices,
     releasedAt: schema.scryfallCards.releasedAt,
+    layout: schema.scryfallCards.layout,
     promo: schema.scryfallCards.promo,
     seriealized: schema.scryfallCards.seriealized,
     fullArt: schema.scryfallCards.fullArt,
@@ -66,7 +84,9 @@ cardsRouter.get('/find', (req, res) => {
       .limit(20)
       .all();
 
-    return res.json(cards.map(parseCard));
+    const result = cards.map(parseCard);
+    if (req.query.counts === '1') attachCollectionCounts(result);
+    return res.json(result);
   }
 
   const setCode = parsed.set!;
@@ -85,7 +105,9 @@ cardsRouter.get('/find', (req, res) => {
     .all();
 
   if (allMatch.length > 0) {
-    return res.json(allMatch.map(parseCard));
+    const result = allMatch.map(parseCard);
+    if (req.query.counts === '1') attachCollectionCounts(result);
+    return res.json(result);
   }
 
   const likeResult = catalogDb.select(cardFields)
@@ -105,6 +127,7 @@ cardsRouter.get('/find', (req, res) => {
     imageUris: localImageUris(c.id, c.imageUris),
     prices: c.prices ? JSON.parse(c.prices) : null,
   }));
+  if (req.query.counts === '1') attachCollectionCounts(result);
   res.json(result);
 });
 
@@ -229,6 +252,7 @@ cardsRouter.get('/grouped', (req, res) => {
     colors: string | null;
     imageUris: string | null;
     cardFaces: string | null;
+    layout: string | null;
     printings: number;
     firstPrinting: string | null;
     lastPrinting: string | null;
@@ -269,6 +293,7 @@ cardsRouter.get('/grouped', (req, res) => {
       r.colors,
       r.image_uris as imageUris,
       r.card_faces as cardFaces,
+      r.layout as layout,
       s.printings,
       s.firstPrinting,
       s.lastPrinting
@@ -286,6 +311,36 @@ cardsRouter.get('/grouped', (req, res) => {
     imageUris: localImageUris(r.id, r.imageUris),
     cardFaces: localizeCardFaces(r.id, r.cardFaces),
   }));
+
+  if (req.query.counts === '1') {
+    const names = parsed.map(r => r.name);
+    if (names.length > 0) {
+      const idRows = catalogDb.all<{ id: string }>(
+        sql`SELECT id FROM scryfall_cards WHERE name IN (${sql.join(names.map(n => sql`${n}`), sql`, `)})`
+      );
+      const ids = idRows.map(r => r.id);
+      const byName = new Map<string, number>();
+      if (ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        const countRows = sqlite.prepare(
+          `SELECT ci.card_id as cardId, SUM(ci.quantity) as total
+           FROM collection_items ci
+           WHERE ci.card_id IN (${placeholders})
+           GROUP BY ci.card_id`
+        ).all(...ids) as Array<{ cardId: string; total: number }>;
+        for (const r of countRows) {
+          const row = parsed.find(p => p.id === r.cardId);
+          const n = row?.name;
+          if (n) byName.set(n, (byName.get(n) || 0) + r.total);
+        }
+      }
+      for (const r of parsed) {
+        (r as any).collectionCount = byName.get(r.name) || 0;
+      }
+    } else {
+      parsed.forEach(r => { (r as any).collectionCount = 0; });
+    }
+  }
 
   res.json({ data: parsed, total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
 });
@@ -316,7 +371,9 @@ cardsRouter.get('/printings', (req, res) => {
       .limit(pageSize)
       .offset((page - 1) * pageSize)
       .all();
-    return res.json({ data: printings.map(parseCard), total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
+    const data = printings.map(parseCard);
+    if (req.query.counts === '1') attachCollectionCounts(data);
+    return res.json({ data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) });
   }
 
   const printings = catalogDb.select()
@@ -325,7 +382,9 @@ cardsRouter.get('/printings', (req, res) => {
     .orderBy(desc(schema.scryfallCards.releasedAt))
     .all();
 
-  res.json(printings.map(parseCard));
+  const data = printings.map(parseCard);
+  if (req.query.counts === '1') attachCollectionCounts(data);
+  res.json(data);
 });
 
 cardsRouter.get('/sets', (_req, res) => {

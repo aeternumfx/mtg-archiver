@@ -43,12 +43,14 @@ export interface CardResult {
   imageUris: Record<string, string> | null;
   prices: Record<string, string | null> | null;
   releasedAt: string | null;
+  layout: string | null;
   promo: number;
   seriealized: number;
   fullArt: number;
   textless: number;
   finishes: string[] | null;
   frameEffects: string[] | null;
+  cardFaces?: Array<{ image_uris?: Record<string, string> }> | null;
 }
 
 export interface GroupedCard {
@@ -60,9 +62,11 @@ export interface GroupedCard {
   colors: string[] | null;
   imageUris: Record<string, string> | null;
   cardFaces?: Array<{ image_uris?: Record<string, string> }> | null;
+  layout: string | null;
   printings: number;
   firstPrinting: string | null;
   lastPrinting: string | null;
+  collectionCount?: number;
 }
 
 export interface Location {
@@ -113,6 +117,7 @@ export interface CollectionItem {
     legalities?: Record<string, string> | null;
     imageUris: Record<string, string> | null;
     prices: Record<string, string | null> | null;
+    layout?: string | null;
     cardFaces?: Array<{ image_uris?: Record<string, string> }> | null;
   };
 }

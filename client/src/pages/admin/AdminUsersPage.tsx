@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Title, Group, Button, Table, Badge, Modal, TextInput, Stack, Text, Alert, ActionIcon, Checkbox,
+  Title, Group, Button, Table, Badge, Modal, TextInput, Stack, Text, Alert, ActionIcon, Checkbox, Avatar, HoverCard,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useNavigate } from 'react-router-dom';
-import { IconUserPlus, IconAlertCircle, IconAlertTriangle, IconRefresh, IconTrash, IconKey, IconPower, IconLogout, IconPencil, IconCopy, IconShare, IconEye, IconSparkles, IconShieldUp, IconShieldDown } from '@tabler/icons-react';
+import { IconUserPlus, IconAlertCircle, IconAlertTriangle, IconRefresh, IconTrash, IconKey, IconPower, IconLogout, IconPencil, IconCopy, IconShare, IconEye, IconSparkles, IconShieldUp, IconShieldDown, IconDatabase } from '@tabler/icons-react';
 import { api } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 
 interface AdminUser {
   id: number;
   username: string;
+  displayName: string | null;
+  avatar: string | null;
   role: string;
   disabled: number;
   mustChangePassword: number;
@@ -19,7 +21,16 @@ interface AdminUser {
   activeSessions: number;
   pendingTour: boolean;
   demo: boolean;
+  storageBytes: number;
 }
+
+const formatBytes = (b: number | undefined | null) => {
+  if (!b) return '—';
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+};
 
 export default function AdminUsersPage() {
   const { user: me, refresh } = useAuth();
@@ -89,7 +100,7 @@ export default function AdminUsersPage() {
       await load();
       notifications.show({
         title: disabling ? 'Disabled' : 'Enabled',
-        message: `${confirmDisable.username} has been ${disabling ? 'disabled' : 'enabled'}.`,
+        message: `@${confirmDisable.username} has been ${disabling ? 'disabled' : 'enabled'}.`,
         color: disabling ? 'orange' : 'green',
       });
     } catch (err: any) {
@@ -104,7 +115,7 @@ export default function AdminUsersPage() {
       setConfirmDelete(null);
       setPermanent(false);
       await load();
-      notifications.show({ title: 'Deleted', message: `${confirmDelete.username} ${permanent ? 'permanently deleted' : 'disabled'}`, color: 'green' });
+      notifications.show({ title: 'Deleted', message: `@${confirmDelete.username} ${permanent ? 'permanently deleted' : 'disabled'}`, color: 'green' });
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     }
@@ -129,7 +140,7 @@ export default function AdminUsersPage() {
       await api.admin.revokeSessions(revokeUser.id);
       setRevokeUser(null);
       await load();
-      notifications.show({ title: 'Sessions revoked', message: `${revokeUser.username} has been signed out everywhere.`, color: 'green' });
+      notifications.show({ title: 'Sessions revoked', message: `@${revokeUser.username} has been signed out everywhere.`, color: 'green' });
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     }
@@ -153,7 +164,7 @@ export default function AdminUsersPage() {
       await api.admin.resetTour(tourUser.id);
       setTourUser(null);
       await load();
-      notifications.show({ title: 'Tour reset', message: `The intro tour will show for ${tourUser.username} on their next sign-in.`, color: 'green' });
+      notifications.show({ title: 'Tour reset', message: `The intro tour will show for @${tourUser.username} on their next sign-in.`, color: 'green' });
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     }
@@ -172,7 +183,7 @@ export default function AdminUsersPage() {
       await load();
       notifications.show({
         title: 'Role updated',
-        message: `${u.username} is now ${role === 'moderator' ? 'a moderator' : 'a regular user'}.`,
+        message: `@${u.username} is now ${role === 'moderator' ? 'a moderator' : 'a regular user'}.`,
         color: 'green',
       });
     } catch (err: any) {
@@ -217,10 +228,12 @@ export default function AdminUsersPage() {
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Username</Table.Th>
+            <Table.Th>User</Table.Th>
+            <Table.Th>Display name</Table.Th>
             <Table.Th>Role</Table.Th>
             <Table.Th>Status</Table.Th>
             <Table.Th>Sessions</Table.Th>
+            <Table.Th>Storage</Table.Th>
             <Table.Th>Password</Table.Th>
             <Table.Th>Created</Table.Th>
             <Table.Th>Last login</Table.Th>
@@ -230,14 +243,44 @@ export default function AdminUsersPage() {
         <Table.Tbody>
           {users.map(u => (
             <Table.Tr key={u.id} opacity={u.disabled ? 0.5 : 1}>
-              <Table.Td fw={600}>
-                {u.username}{u.id === me?.id ? ' (you)' : ''}
-                {u.demo && <Badge size="xs" ml={6} color="orange" variant="light">Demo</Badge>}
-                {!u.demo && u.id !== me?.id && (
-                  <ActionIcon variant="subtle" size="xs" ml={4} color="gray" title="Rename user"
-                    onClick={() => { setRenameValue(u.username); setRenameUser(u); }}>
-                    <IconPencil size={13} />
-                  </ActionIcon>
+              <Table.Td>
+                <Group gap="sm" wrap="nowrap">
+                  <HoverCard width={0} shadow="md" withArrow openDelay={150} closeDelay={0}>
+                    <HoverCard.Target>
+                      <Avatar size={32} radius="xl" color="blue" src={u.avatar || undefined}>
+                        {u.username?.[0]?.toUpperCase() ?? '?'}
+                      </Avatar>
+                    </HoverCard.Target>
+                    <HoverCard.Dropdown p={0} style={{ border: 'none', background: 'transparent' }}>
+                      <Avatar size={110} radius="xl" color="blue" src={u.avatar || undefined}>
+                        {u.username?.[0]?.toUpperCase() ?? '?'}
+                      </Avatar>
+                    </HoverCard.Dropdown>
+                  </HoverCard>
+                  <div style={{ minWidth: 0 }}>
+                    <Group gap={6} wrap="nowrap">
+                      <Text size="sm" fw={600} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+                        @{u.username}
+                      </Text>
+                      {u.id === me?.id && <Badge size="xs" variant="light" color="blue">you</Badge>}
+                      {u.demo && <Badge size="xs" color="orange" variant="light">Demo</Badge>}
+                      {!u.demo && u.id !== me?.id && (
+                        <ActionIcon variant="subtle" size="xs" color="gray" title="Rename user"
+                          onClick={() => { setRenameValue(u.username); setRenameUser(u); }}>
+                          <IconPencil size={13} />
+                        </ActionIcon>
+                      )}
+                    </Group>
+                  </div>
+                </Group>
+              </Table.Td>
+              <Table.Td>
+                {u.displayName ? (
+                  <Text size="sm" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>
+                    {u.displayName}
+                  </Text>
+                ) : (
+                  <Text size="sm" c="dimmed">not set</Text>
                 )}
               </Table.Td>
               <Table.Td>
@@ -272,6 +315,12 @@ export default function AdminUsersPage() {
                       <IconLogout size={13} />
                     </ActionIcon>
                   )}
+                </Group>
+              </Table.Td>
+              <Table.Td>
+                <Group gap={4} wrap="nowrap">
+                  <IconDatabase size={14} style={{ opacity: 0.5 }} />
+                  <Text size="sm" tt="nowrap">{formatBytes(u.storageBytes)}</Text>
                 </Group>
               </Table.Td>
               <Table.Td>
@@ -340,7 +389,7 @@ export default function AdminUsersPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={!!confirmReset} onClose={() => setConfirmReset(null)} title={`Reset password for ${confirmReset?.username ?? ''}`} size="sm">
+      <Modal opened={!!confirmReset} onClose={() => setConfirmReset(null)} title={`Reset password for @${confirmReset?.username ?? ''}`} size="sm">
         <Text size="sm" mb="md">
           A new temporary password will be generated and shown once. The user will be asked to set their own password on next login.
         </Text>
@@ -350,7 +399,7 @@ export default function AdminUsersPage() {
         </Group>
       </Modal>
 
-      <Modal opened={!!renameUser} onClose={() => setRenameUser(null)} title={`Rename ${renameUser?.username ?? ''}`} size="sm">
+      <Modal opened={!!renameUser} onClose={() => setRenameUser(null)} title={`Rename @${renameUser?.username ?? ''}`} size="sm">
         <Stack gap="md">
           <Text size="sm" c="dimmed">
             The user's id and data stay the same — only the login name changes.
@@ -364,7 +413,7 @@ export default function AdminUsersPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={!!revokeUser} onClose={() => setRevokeUser(null)} title={`Sign out ${revokeUser?.username ?? ''}?`} size="sm">
+      <Modal opened={!!revokeUser} onClose={() => setRevokeUser(null)} title={`Sign out @${revokeUser?.username ?? ''}?`} size="sm">
         <Text size="sm" mb="md">
           This signs the user out of all their active sessions. They'll need to log in again.
         </Text>
@@ -388,7 +437,7 @@ export default function AdminUsersPage() {
             ) : (
               <Text size="sm">
                 Are you sure you want to <b>{confirmDisable.disabled ? 'enable' : 'disable'}</b> the account for{' '}
-                <b>{confirmDisable.username}</b>?
+                <b>@{confirmDisable.username}</b>?
               </Text>
             )}
             <Group justify="flex-end">
@@ -407,13 +456,13 @@ export default function AdminUsersPage() {
           <Stack gap="md">
             {confirmRole.role === 'moderator' ? (
               <Alert icon={<IconShieldUp size={16} />} color="cyan" variant="light">
-                Promote <b>{confirmRole.user.username}</b> to <b>moderator</b>? Moderators get a bell in the header
+                Promote <b>@{confirmRole.user.username}</b> to <b>moderator</b>? Moderators get a bell in the header
                 showing how many pending user requests there are (and their types), but they <b>cannot</b> access the
                 admin page or review the requests themselves. They keep their own collection.
               </Alert>
             ) : (
               <Alert icon={<IconShieldDown size={16} />} color="gray" variant="light">
-                Demote <b>{confirmRole.user.username}</b> to a regular <b>user</b>? They'll lose the pending-requests
+                Demote <b>@{confirmRole.user.username}</b> to a regular <b>user</b>? They'll lose the pending-requests
                 bell and go back to a normal account. They keep their own collection.
               </Alert>
             )}
@@ -427,7 +476,7 @@ export default function AdminUsersPage() {
         )}
       </Modal>
 
-      <Modal opened={!!viewUser} onClose={() => setViewUser(null)} title={`View as ${viewUser?.username ?? ''}`} size="sm">
+      <Modal opened={!!viewUser} onClose={() => setViewUser(null)} title={`View as @${viewUser?.username ?? ''}`} size="sm">
         <Stack gap="md">
           <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
             You'll see this user's account exactly as they do. A red banner will stay visible until you exit. No
@@ -440,10 +489,10 @@ export default function AdminUsersPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={!!tourUser} onClose={() => setTourUser(null)} title={`Re-trigger intro tour for ${tourUser?.username ?? ''}`} size="sm">
+      <Modal opened={!!tourUser} onClose={() => setTourUser(null)} title={`Re-trigger intro tour for @${tourUser?.username ?? ''}`} size="sm">
         <Stack gap="md">
           <Text size="sm">
-            The intro tour will show the next time <b>{tourUser?.username}</b> signs in. Their status will be set to
+            The intro tour will show the next time <b>@{tourUser?.username}</b> signs in. Their status will be set to
             "pending intro tour".
           </Text>
           <Group justify="flex-end">
@@ -453,7 +502,7 @@ export default function AdminUsersPage() {
         </Stack>
       </Modal>
 
-      <Modal opened={!!confirmDelete} onClose={() => setConfirmDelete(null)} title={`Delete ${confirmDelete?.username ?? ''}`} size="sm">
+      <Modal opened={!!confirmDelete} onClose={() => setConfirmDelete(null)} title={`Delete @${confirmDelete?.username ?? ''}`} size="sm">
         <Stack gap="md">
           <Text size="sm">Choose what to do with this account:</Text>
           <Group>
