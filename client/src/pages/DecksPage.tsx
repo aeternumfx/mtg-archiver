@@ -852,6 +852,13 @@ export default function DecksPage() {
     return true;
   });
 
+  const filteredRequiredCards = requiredCards.filter(req => {
+    if (deckSearch && !req.cardName.toLowerCase().includes(deckSearch.toLowerCase())) return false;
+    if (deckTypeFilter) return false;
+    if (deckColorFilter) return false;
+    return true;
+  });
+
   const formatKey = selectedDeck?.deckType === 'commander' ? 'commander' : (selectedDeck?.deckType || '');
   const isCardLegal = (card: { legalities?: Record<string, string> | null }): boolean => {
     const st = card.legalities?.[formatKey];
@@ -1251,13 +1258,13 @@ export default function DecksPage() {
               });
             })()}
 
-            {requiredCards.length > 0 && (
+            {filteredRequiredCards.length > 0 && (
               <>
                 <Group mt="lg" mb="sm">
                   <IconList size={16} opacity={0.5} />
-                  <Text size="sm" c="dimmed">Required Cards ({requiredCards.length})</Text>
+                  <Text size="sm" c="dimmed">Required Cards ({filteredRequiredCards.length})</Text>
                 </Group>
-                {requiredCards.map(req => {
+                {filteredRequiredCards.map(req => {
                   const nameL = req.cardName.toLowerCase();
                   const isCmdGhost = req.cardId
                     ? req.cardId === selectedDeck.commanderCardId
@@ -1316,7 +1323,8 @@ export default function DecksPage() {
             {!cardsLoading && deckCards.length === 0 && requiredCards.length === 0 && (
               <Text c="dimmed" ta="center" py="xl">No cards in this deck yet. Search above to add cards.</Text>
             )}
-            {!cardsLoading && deckCards.length > 0 && filteredDeckCards.length === 0 && (
+            {!cardsLoading && (deckCards.length > 0 || requiredCards.length > 0)
+              && filteredDeckCards.length === 0 && filteredRequiredCards.length === 0 && (
               <Text c="dimmed" ta="center" py="xl">No cards match your search/filter.</Text>
             )}
           </Box>
