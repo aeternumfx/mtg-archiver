@@ -2,8 +2,11 @@ import { systemSqlite } from '../db/system';
 import { hashPassword, generateTempPassword } from './password';
 import { deleteUserSessions } from './sessions';
 import fs from 'fs';
+import { randomBytes } from 'crypto';
 import { userDbPath, usersDir } from '../db/paths';
 import { closeUserConnection } from '../db/user';
+
+export type PrivacyLevel = 'public' | 'password' | 'private';
 
 export interface UserRow {
   id: number;
@@ -14,12 +17,16 @@ export interface UserRow {
   demo: number;
   displayName: string | null;
   avatar: string | null;
+  collectionPrivacy: string;
+  wantlistPrivacy: string;
+  shareToken: string | null;
   createdAt: string;
   lastLoginAt: string | null;
 }
 
 const USER_COLS = `id, username, role, disabled, must_change_password as mustChangePassword, demo,
   display_name as displayName, avatar,
+  collection_privacy as collectionPrivacy, wantlist_privacy as wantlistPrivacy, share_token as shareToken,
   created_at as createdAt, last_login_at as lastLoginAt`;
 
 export function getUserByUsername(username: string): UserRow | undefined {
@@ -119,3 +126,53 @@ export function adminStats() {
 }
 
 export { generateTempPassword };
+
+export function generateShareToken(): string {
+  return randomBytes(24).toString('base64url');
+}
+
+export function getUserShareToken(userId: number): string | null {
+  const row = systemSqlite.prepare('SELECT share_token as t FROM users WHERE id = ?').get(userId) as { t: string | null } | undefined;
+  return row?.t ?? null;
+}
+
+export function getUserByShareToken(token: string): UserRow | undefined {
+  return systemSqlite.prepare(`SELECT ${USER_COLS} FROM users WHERE share_token = ?`).get(token) as UserRow | undefined;
+}
+
+export function getUserCollectionPasswordHash(userId: number): string {
+  const row = systemSqlite.prepare('SELECT collection_password as h FROM users WHERE id = ?').get(userId) as { h: string | null } | undefined;
+  return row?.h ?? '';
+}
+
+export function getUserWantlistPasswordHash(userId: number): string {
+  const row = systemSqlite.prepare('SELECT wantlist_password as h FROM users WHERE id = ?').get(userId) as { h: string | null } | undefined;
+  return row?.h ?? '';
+}
+
+export function updateUserPrivacy(
+  userId: number,
+  fields: {
+    collectionPrivacy?: PrivacyLevel;
+    wantlistPrivacy?: PrivacyLevel;
+    collectionPassword?: string | null;
+    wantlistPassword?: string | null;
+  },
+) {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (fields.collectionPrivacy !== undefined) { sets.push('collection_privacy = ?'); params.push(fields.collectionPrivacy); }
+  if (fields.wantlistPrivacy !== undefined) { sets.push('wantlist_privacy = ?'); params.push(fields.wantlistPrivacy); }
+  if (fields.collectionPassword !== undefined) { sets.push('collection_password = ?'); params.push(fields.collectionPassword); }
+  if (fields.wantlistPassword !== undefined) { sets.push('wantlist_password = ?'); params.push(fields.wantlistPassword); }
+  // Ensure a share token exists whenever anything is shared.
+  if (!getUserShareToken(userId)) {
+    sets.push('share_token = ?');
+    params.push(generateShareToken());
+  }
+  if (sets.length === 0) return;
+  params.push(userId);
+  systemSqlite.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+}
+
+export { hashPassword };

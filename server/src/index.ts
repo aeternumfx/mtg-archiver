@@ -25,6 +25,7 @@ import { authRouter } from './routes/auth';
 import { adminRouter } from './routes/admin';
 import { imagesRouter } from './routes/images';
 import { requestsRouter, adminRequestsRouter } from './routes/requests';
+import { shareRouter, profilePrivacyRouter } from './routes/share';
 import { initScheduler, getSchedulerStatus } from './scheduler';
 import { logActivity } from './services/activityLog';
 import { getSystemSettings } from './services/systemSettings';
@@ -76,6 +77,8 @@ app.use((req, res, next) => {
 });
 
 app.use('/api/auth', authRouter);
+app.use('/api/profile/privacy', requireUser, profilePrivacyRouter);
+app.use('/api/share', shareRouter);
 
 app.get('/api/meta', (_req, res) => {
   const s = getSystemSettings();

@@ -69,6 +69,21 @@ export function initSystemSchema(sqlite: DatabaseType) {
   if (!userCols.includes('avatar')) {
     sqlite.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
   }
+  if (!userCols.includes('collection_privacy')) {
+    sqlite.exec("ALTER TABLE users ADD COLUMN collection_privacy TEXT NOT NULL DEFAULT 'private'");
+  }
+  if (!userCols.includes('wantlist_privacy')) {
+    sqlite.exec("ALTER TABLE users ADD COLUMN wantlist_privacy TEXT NOT NULL DEFAULT 'private'");
+  }
+  if (!userCols.includes('collection_password')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN collection_password TEXT');
+  }
+  if (!userCols.includes('wantlist_password')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN wantlist_password TEXT');
+  }
+  if (!userCols.includes('share_token')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN share_token TEXT');
+  }
 
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS sessions (

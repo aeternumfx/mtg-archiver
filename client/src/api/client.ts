@@ -1,4 +1,4 @@
-import type { PaginatedResponse, GroupedCard, ScryfallCard, CardResult, Location, LocationGroup, CollectionItem, SyncStatus } from '../types';
+import type { PaginatedResponse, GroupedCard, ScryfallCard, CardResult, Location, LocationGroup, CollectionItem, SyncStatus, ImportDiffReport, ImportOptions, DbSchemaHealth } from '../types';
 
 let onUnauthorized: (() => void) | null = null;
 
@@ -19,9 +19,13 @@ function handleAuthError(status: number, url: string): boolean {
 }
 
 async function parseError(res: Response, url: string): Promise<Error> {
-  const err = await res.json().catch(() => ({ error: res.statusText }));
+  const body = await res.json().catch(() => null);
   handleAuthError(res.status, url);
-  return new Error(err.error || res.statusText);
+  const message = body?.error || res.statusText;
+  const err = new Error(message) as Error & { status?: number; body?: unknown };
+  err.status = res.status;
+  err.body = body;
+  return err;
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -99,8 +103,7 @@ export const api = {
     summary: () => request<Record<string, number>>('/api/requests/summary'),
   },
   auth: {
-    me: () => request<{ user: AuthUser }>('/api/auth/me'),
-    login: (username: string, password: string) =>
+    me: () => request<{ user: AuthUser }>('/api/auth/me'),    login: (username: string, password: string) =>
       request<{ user: AuthUser }>('/api/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
@@ -121,6 +124,77 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+  },
+
+  privacy: {
+    get: () => request<{
+      collectionPrivacy: string;
+      wantlistPrivacy: string;
+      shareToken: string | null;
+      username: string;
+      displayName: string | null;
+    }>('/api/profile/privacy'),
+    update: (data: {
+      collectionPrivacy?: 'public' | 'password' | 'private';
+      wantlistPrivacy?: 'public' | 'password' | 'private';
+      collectionPassword?: string | null;
+      wantlistPassword?: string | null;
+    }) =>
+      request<{
+        collectionPrivacy: string;
+        wantlistPrivacy: string;
+        shareToken: string | null;
+        username: string;
+      }>('/api/profile/privacy', { method: 'PUT', body: JSON.stringify(data) }),
+  },
+
+  share: {
+    status: (token: string) =>
+      request<{
+        displayName: string | null;
+        avatar: string | null;
+        collection: { shared: boolean; password: boolean };
+        wantlist: { shared: boolean; password: boolean };
+      }>(`/api/share/${token}/status`),
+    verify: (token: string, scope: 'collection' | 'wantlist', password?: string) =>
+      request<{ scope: string; access: string | null }>(`/api/share/${token}/verify`, {
+        method: 'POST',
+        body: JSON.stringify({ scope, password }),
+      }),
+    collection: (token: string, access?: string | null) =>
+      request<{
+        displayName: string | null;
+        items: Array<{
+          id: number;
+          cardId: string;
+          locationId: number;
+          foil: number;
+          condition: string | null;
+          quantity: number;
+          proxy: number;
+          misprint: number;
+          altered: number;
+          notes: string | null;
+          locationName: string | null;
+          card: any;
+        }>;
+      }>(`/api/share/${token}/collection${access ? `?access=${encodeURIComponent(access)}` : ''}`),
+    wantlist: (token: string, access?: string | null) =>
+      request<{
+        displayName: string | null;
+        items: Array<{
+          id: number;
+          cardId: string | null;
+          cardName: string;
+          setCode: string | null;
+          collectorNumber: string | null;
+          foil: number;
+          quantity: number;
+          notes: string | null;
+          destinationName: string | null;
+          card: any;
+        }>;
+      }>(`/api/share/${token}/wantlist${access ? `?access=${encodeURIComponent(access)}` : ''}`),
   },
 
   admin: {
@@ -163,6 +237,12 @@ export const api = {
       URL.revokeObjectURL(url);
     },
     overview: () => request<{ users: number; admins: number; disabled: number; userDbs: number }>('/api/admin/overview'),
+    dbSchema: () => request<DbSchemaHealth>('/api/admin/db-schema'),
+    pruneDbSchema: (userId: number) =>
+      request<{ message: string; removed: string[]; errors: string[] }>('/api/admin/db-schema/prune', {
+        method: 'POST',
+        body: JSON.stringify({ userId }),
+      }),
     stats: () => request<{
       users: { total: number; admins: number; disabled: number; active7d: number; active30d: number; activeSessions: number };
       storage: {
@@ -289,10 +369,15 @@ export const api = {
       collectionItems: any[];
       collectionHistory: any[];
     }>('/api/data/export'),
-    import: (data: any, mode: 'merge' | 'replace') =>
+    importPreview: (data: any) =>
+      request<ImportDiffReport>('/api/data/import/preview', {
+        method: 'POST',
+        body: JSON.stringify({ data }),
+      }),
+    import: (data: any, mode: 'merge' | 'replace', options?: ImportOptions) =>
       request<{ message: string }>('/api/data/import', {
         method: 'POST',
-        body: JSON.stringify({ data, mode }),
+        body: JSON.stringify({ data, mode, options }),
       }),
     delete: () =>
       request<{ message: string }>('/api/data/delete', {
@@ -397,8 +482,22 @@ export const api = {
       request<any>(`/api/decks/${id}/required/${reqId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     fillRequired: (id: number, reqId: number, itemId: number, schedule?: boolean) =>
       request<any>(`/api/decks/${id}/required/${reqId}/fill`, { method: 'POST', body: JSON.stringify({ itemId, schedule: !!schedule }) }),
+    fillRequiredExternal: (id: number, reqId: number, data: {
+      cardId: string;
+      locationId?: number;
+      quantity?: number;
+      foil?: boolean;
+      condition?: string | null;
+      purchasePrice?: string | number | null;
+      packOpened?: boolean;
+      notes?: string;
+      destinationId?: number | null;
+    }) =>
+      request<{ item: { id: number }; removedGhost: any }>(`/api/decks/${id}/required/${reqId}/fill-external`, { method: 'POST', body: JSON.stringify(data) }),
     moveRequired: (id: number, reqId: number, data: { destinationType: 'location' | 'deck'; destinationId: number }) =>
       request<any>(`/api/decks/${id}/required/${reqId}/move`, { method: 'POST', body: JSON.stringify(data) }),
+    importDeck: (data: { name: string; description?: string; deckType?: string; content: string; format?: 'auto' | 'csv' | 'text' }) =>
+      request<any>('/api/decks/import', { method: 'POST', body: JSON.stringify(data) }),
   },
 
   collection: {
@@ -416,6 +515,9 @@ export const api = {
       condition?: string | null;
       purchasePrice?: number | null;
       packOpened?: boolean;
+      proxy?: boolean;
+      misprint?: boolean;
+      altered?: boolean;
       notes?: string;
       acquiredAt?: string;
       destinationId?: number | null;
@@ -430,6 +532,9 @@ export const api = {
       condition?: string | null;
       purchasePrice?: number | null;
       packOpened?: boolean;
+      proxy?: boolean;
+      misprint?: boolean;
+      altered?: boolean;
       notes?: string;
       acquiredAt?: string;
       destinationId?: number | null;

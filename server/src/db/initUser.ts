@@ -219,6 +219,9 @@ export function initUserSchema(sqlite: DatabaseType) {
   const ciCols = (sqlite.pragma('table_info(collection_items)') as Array<{ name: string }>).map(c => c.name);
   if (!ciCols.includes('deck_id')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN deck_id INTEGER REFERENCES decks(id)');
   if (!ciCols.includes('destination_id')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN destination_id INTEGER REFERENCES locations(id)');
+  if (!ciCols.includes('proxy')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN proxy INTEGER NOT NULL DEFAULT 0');
+  if (!ciCols.includes('misprint')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN misprint INTEGER NOT NULL DEFAULT 0');
+  if (!ciCols.includes('altered')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN altered INTEGER NOT NULL DEFAULT 0');
 
   const chCols = (sqlite.pragma('table_info(collection_history)') as Array<{ name: string }>).map(c => c.name);
   if (!chCols.includes('purchase_value')) sqlite.exec('ALTER TABLE collection_history ADD COLUMN purchase_value REAL');

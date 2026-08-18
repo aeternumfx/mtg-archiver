@@ -102,6 +102,9 @@ collectionRouter.get('/', (req, res) => {
     purchasePrice: schema.collectionItems.purchasePrice,
     priceAutofilled: schema.collectionItems.priceAutofilled,
     packOpened: schema.collectionItems.packOpened,
+    proxy: schema.collectionItems.proxy,
+    misprint: schema.collectionItems.misprint,
+    altered: schema.collectionItems.altered,
     notes: schema.collectionItems.notes,
     acquiredAt: schema.collectionItems.acquiredAt,
     createdAt: schema.collectionItems.createdAt,
@@ -124,7 +127,7 @@ collectionRouter.get('/', (req, res) => {
 });
 
 collectionRouter.post('/', (req, res) => {
-  let { cardId, locationId, destinationId, quantity, foil, condition, purchasePrice, priceAutofilled, packOpened, notes, acquiredAt, forceNew } = req.body;
+  let { cardId, locationId, destinationId, quantity, foil, condition, purchasePrice, priceAutofilled, packOpened, notes, acquiredAt, forceNew, proxy, misprint, altered } = req.body;
 
   if (!cardId || !locationId) {
     return res.status(400).json({ error: 'cardId and locationId are required' });
@@ -140,6 +143,9 @@ collectionRouter.post('/', (req, res) => {
   condition = condition || null;
   quantity = quantity ?? 1;
   packOpened = packOpened ? 1 : 0;
+  proxy = proxy ? 1 : 0;
+  misprint = misprint ? 1 : 0;
+  altered = altered ? 1 : 0;
   priceAutofilled = priceAutofilled ? 1 : 0;
   if (!acquiredAt) acquiredAt = new Date().toISOString().split('T')[0];
 
@@ -158,6 +164,9 @@ collectionRouter.post('/', (req, res) => {
       eq(schema.collectionItems.cardId, cardId),
       eq(schema.collectionItems.locationId, locationId),
       eq(schema.collectionItems.foil, foil),
+      eq(schema.collectionItems.proxy, proxy),
+      eq(schema.collectionItems.misprint, misprint),
+      eq(schema.collectionItems.altered, altered),
       condition ? eq(schema.collectionItems.condition, condition) : sql`${schema.collectionItems.condition} IS NULL`,
     ))
     .get();
@@ -174,7 +183,7 @@ collectionRouter.post('/', (req, res) => {
   }
 
   const item = db.insert(schema.collectionItems)
-    .values({ cardId, locationId, destinationId: destinationId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, notes: notes ?? null, acquiredAt })
+    .values({ cardId, locationId, destinationId: destinationId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, proxy, misprint, altered, notes: notes ?? null, acquiredAt })
     .returning().get();
 
   const foundCard = cardById(cardId);
@@ -191,7 +200,7 @@ collectionRouter.patch('/:id', (req, res) => {
   const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, id)).get();
   if (!item) return res.status(404).json({ error: 'Collection item not found' });
 
-  const { quantity, foil, condition, purchasePrice, packOpened, notes, acquiredAt, destinationId, locationId } = req.body;
+  const { quantity, foil, condition, purchasePrice, packOpened, notes, acquiredAt, destinationId, locationId, proxy, misprint, altered } = req.body;
 
   const updates: Record<string, unknown> = {};
   if (quantity !== undefined) updates.quantity = quantity;
@@ -199,6 +208,9 @@ collectionRouter.patch('/:id', (req, res) => {
   if (condition !== undefined) updates.condition = condition || null;
   if (purchasePrice !== undefined) updates.purchasePrice = purchasePrice;
   if (packOpened !== undefined) updates.packOpened = packOpened ? 1 : 0;
+  if (proxy !== undefined) updates.proxy = proxy ? 1 : 0;
+  if (misprint !== undefined) updates.misprint = misprint ? 1 : 0;
+  if (altered !== undefined) updates.altered = altered ? 1 : 0;
   if (notes !== undefined) updates.notes = notes;
   if (acquiredAt !== undefined) updates.acquiredAt = acquiredAt;
   if (locationId !== undefined) {
@@ -282,6 +294,9 @@ collectionRouter.post('/:id/split-copy', (req, res) => {
           purchasePrice: item.purchasePrice,
           priceAutofilled: item.priceAutofilled,
           packOpened: item.packOpened,
+          proxy: item.proxy,
+          misprint: item.misprint,
+          altered: item.altered,
           notes: item.notes,
           acquiredAt: item.acquiredAt,
         })
@@ -304,12 +319,28 @@ collectionRouter.post('/move', (req, res) => {
   const destLoc = db.select().from(schema.locations).where(eq(schema.locations.id, destinationLocationId)).get();
   if (!destLoc) return res.status(404).json({ error: 'Destination location not found' });
 
+  // Moving to a deck's location links the card to that deck; moving out of a
+  // deck location to a non-deck location unlinks it.
+  const destDeckId = destLoc.deckId ?? null;
+
+  const parseQty = (q: unknown): number | null => {
+    if (q === null || q === undefined || q === '') return null;
+    const n = Math.floor(Number(q));
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  };
+
   try {
     const results = sqlite.transaction(() => {
       const results: Array<{ id: number; cardId: string; quantity: number }> = [];
 
       for (const item of items) {
-        const { id: itemId, quantity = null } = item;
+        const itemId = Number(item?.id);
+        if (!Number.isInteger(itemId) || itemId <= 0) throw new Error('Invalid collection item id');
+        const parsedQty = parseQty(item?.quantity);
+        if (item?.quantity !== undefined && item?.quantity !== null && item?.quantity !== '' && parsedQty === null) {
+          throw new Error('Invalid quantity');
+        }
 
         const sourceItem = db.select()
           .from(schema.collectionItems)
@@ -320,19 +351,10 @@ collectionRouter.post('/move', (req, res) => {
           throw new Error(`Collection item ${itemId} not found`);
         }
 
-        const moveQty = quantity !== null ? Math.min(quantity as number, sourceItem.quantity) : sourceItem.quantity;
+        const moveQty = parsedQty !== null ? Math.min(parsedQty, sourceItem.quantity) : sourceItem.quantity;
         if (moveQty <= 0) continue;
 
         const remaining = sourceItem.quantity - moveQty;
-
-        if (remaining > 0) {
-          db.update(schema.collectionItems)
-            .set({ quantity: remaining })
-            .where(eq(schema.collectionItems.id, sourceItem.id))
-            .run();
-        } else {
-          db.delete(schema.collectionItems).where(eq(schema.collectionItems.id, sourceItem.id)).run();
-        }
 
         const destExisting = db.select()
           .from(schema.collectionItems)
@@ -340,35 +362,87 @@ collectionRouter.post('/move', (req, res) => {
             eq(schema.collectionItems.cardId, sourceItem.cardId),
             eq(schema.collectionItems.locationId, destinationLocationId),
             eq(schema.collectionItems.foil, sourceItem.foil),
+            eq(schema.collectionItems.proxy, sourceItem.proxy),
+            eq(schema.collectionItems.misprint, sourceItem.misprint),
+            eq(schema.collectionItems.altered, sourceItem.altered),
             sourceItem.condition
               ? eq(schema.collectionItems.condition, sourceItem.condition)
               : sql`${schema.collectionItems.condition} IS NULL`,
           ))
           .get();
 
-        if (destExisting) {
+        if (destExisting && destExisting.id !== sourceItem.id) {
+          // Fully moved: remove the source, merge into an identical destination row.
+          // Preserve notes/price from the source (prefer a manually-set price).
+          // The source row is being merged away; drop any ghost link that pointed at it.
+          sqlite.prepare('UPDATE deck_required_cards SET fill_item_id = NULL WHERE fill_item_id = ?').run(sourceItem.id);
+          if (remaining > 0) {
+            db.update(schema.collectionItems)
+              .set({ quantity: remaining })
+              .where(eq(schema.collectionItems.id, sourceItem.id))
+              .run();
+          } else {
+            db.delete(schema.collectionItems).where(eq(schema.collectionItems.id, sourceItem.id)).run();
+          }
+          const mergedNotes = [destExisting.notes, sourceItem.notes].filter(Boolean).join('\n') || null;
+          const mergedPrice = sourceItem.purchasePrice != null && !sourceItem.priceAutofilled
+            ? sourceItem.purchasePrice
+            : destExisting.purchasePrice;
+          const mergedAutofill = sourceItem.purchasePrice != null && !sourceItem.priceAutofilled
+            ? 0
+            : destExisting.priceAutofilled;
           db.update(schema.collectionItems)
-            .set({ quantity: destExisting.quantity + moveQty })
+            .set({
+              quantity: destExisting.quantity + moveQty,
+              deckId: destExisting.deckId ?? destDeckId,
+              destinationId: null,
+              notes: mergedNotes,
+              purchasePrice: mergedPrice,
+              priceAutofilled: mergedAutofill,
+            })
             .where(eq(schema.collectionItems.id, destExisting.id))
             .run();
+          reconcileDeckGhostLink(destExisting.id);
+          results.push({ id: destExisting.id, cardId: sourceItem.cardId, quantity: moveQty });
+        } else if (remaining === 0) {
+          // No matching destination row and the whole quantity moves in place:
+          // keep the source row's identity so deck links and flags are preserved.
+          db.update(schema.collectionItems)
+            .set({ locationId: destinationLocationId, destinationId: null, deckId: destDeckId })
+            .where(eq(schema.collectionItems.id, sourceItem.id))
+            .run();
+          reconcileDeckGhostLink(sourceItem.id);
+          results.push({ id: sourceItem.id, cardId: sourceItem.cardId, quantity: moveQty });
         } else {
-          db.insert(schema.collectionItems)
+          // Partial move with no destination row: reduce source, create a copy.
+          db.update(schema.collectionItems)
+            .set({ quantity: remaining })
+            .where(eq(schema.collectionItems.id, sourceItem.id))
+            .run();
+          const newItem = db.insert(schema.collectionItems)
             .values({
               cardId: sourceItem.cardId,
               locationId: destinationLocationId,
+              destinationId: null,
+              deckId: destDeckId,
               foil: sourceItem.foil,
               condition: sourceItem.condition,
               quantity: moveQty,
               purchasePrice: sourceItem.purchasePrice,
               priceAutofilled: sourceItem.priceAutofilled,
               packOpened: sourceItem.packOpened,
+              proxy: sourceItem.proxy,
+              misprint: sourceItem.misprint,
+              altered: sourceItem.altered,
               notes: sourceItem.notes,
               acquiredAt: sourceItem.acquiredAt,
             })
-            .run();
+            .returning().get();
+          // If the source stays (still at its old location filling a ghost), keep its
+          // link; the new copy only matters if it now targets a deck ghost.
+          reconcileDeckGhostLink(newItem.id);
+          results.push({ id: newItem.id, cardId: sourceItem.cardId, quantity: moveQty });
         }
-
-        results.push({ id: sourceItem.id, cardId: sourceItem.cardId, quantity: moveQty });
       }
 
       return results;
@@ -462,7 +536,7 @@ collectionRouter.get('/grouped', (req, res) => {
       ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
       ci.foil, ci.condition, ci.quantity,
       ci.purchase_price as purchasePrice, ci.price_autofilled as priceAutofilled,
-      ci.pack_opened as packOpened, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt
+      ci.pack_opened as packOpened, ci.proxy, ci.misprint, ci.altered, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt
     FROM collection_items ci
     ${joins}
     ${sqlWhere}
@@ -508,6 +582,9 @@ collectionRouter.get('/grouped', (req, res) => {
       purchasePrice: i.purchasePrice,
       priceAutofilled: i.priceAutofilled,
       packOpened: i.packOpened,
+      proxy: i.proxy,
+      misprint: i.misprint,
+      altered: i.altered,
       notes: i.notes,
       acquiredAt: i.acquiredAt,
       createdAt: i.createdAt,

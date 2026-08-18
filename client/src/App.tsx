@@ -20,6 +20,7 @@ import WantlistPage from './pages/WantlistPage';
 import TradesPage from './pages/TradesPage';
 import OrganizePage from './pages/OrganizePage';
 import ProfilePage from './pages/ProfilePage';
+import ShareViewPage from './pages/ShareViewPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AdminRequestsPage from './pages/admin/AdminRequestsPage';
@@ -60,12 +61,13 @@ export default function App() {
 
   return (
     <MantineProvider theme={current.theme} forceColorScheme={current.colorScheme}>
-      <Notifications position="bottom-right" autoClose={1200} />
+      <Notifications position="bottom-right" autoClose={5000} />
       <AuthProvider>
         <UndoProvider>
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/share/:token" element={<ShareViewPage />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/add" element={<Protected><AddCardsPage /></Protected>} />
             <Route path="/locations" element={<Protected><LocationsPage /></Protected>} />

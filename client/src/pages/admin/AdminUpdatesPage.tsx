@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Title, Text, Stack, Paper, Group, Button, Badge, Alert, Modal, Progress, Code, FileInput, TextInput,
+  Title, Text, Stack, Paper, Group, Button, Badge, Alert, Modal, Progress, Code, FileInput, TextInput, Table,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconDownload, IconRefresh, IconRocket, IconAlertTriangle, IconCheck, IconExternalLink, IconUpload } from '@tabler/icons-react';
+import { IconDownload, IconRefresh, IconRocket, IconAlertTriangle, IconCheck, IconExternalLink, IconUpload, IconTrash } from '@tabler/icons-react';
 import { api, type UpdateStatus } from '../../api/client';
+import type { DbSchemaHealth } from '../../types';
 
 export default function AdminUpdatesPage() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -17,10 +18,15 @@ export default function AdminUpdatesPage() {
   const [restoreConfirm, setRestoreConfirm] = useState('');
   const [restoring, setRestoring] = useState(false);
   const [restoreMsg, setRestoreMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const [schemaHealth, setSchemaHealth] = useState<DbSchemaHealth | null>(null);
+  const [pruning, setPruning] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
       setStatus(await api.admin.updateStatus());
+    } catch {}
+    try {
+      setSchemaHealth(await api.admin.dbSchema());
     } catch {}
   }, []);
 
@@ -78,6 +84,28 @@ export default function AdminUpdatesPage() {
       setRestoreMsg({ type: 'error', text: err.message });
     } finally {
       setRestoring(false);
+    }
+  };
+
+  const doPrune = async (userId: number, username: string) => {
+    setPruning(userId);
+    try {
+      const res = await api.admin.pruneDbSchema(userId);
+      notifications.show({
+        title: res.removed.length ? 'Columns removed' : 'Nothing to remove',
+        message: res.removed.length
+          ? `${res.removed.length} unsupported column(s) removed from ${username}.`
+          : `No removable unsupported columns found for ${username}.`,
+        color: res.removed.length ? 'green' : 'blue',
+      });
+      if (res.errors.length) {
+        notifications.show({ title: 'Some columns could not be removed', message: res.errors.join(', '), color: 'yellow' });
+      }
+      setSchemaHealth(await api.admin.dbSchema());
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    } finally {
+      setPruning(null);
     }
   };
 
@@ -250,6 +278,73 @@ export default function AdminUpdatesPage() {
             color={restoreMsg.type === 'ok' ? 'green' : 'red'} variant="light">
             {restoreMsg.text}
           </Alert>
+        )}
+      </Paper>
+
+      <Paper p="md" radius="md" withBorder>
+        <Group gap="sm" mb="xs">
+          <Text fw={700}>Database schema health</Text>
+          {schemaHealth && <Badge size="sm" variant="light">schema v{schemaHealth.schemaVersion}</Badge>}
+        </Group>
+        <Text size="sm" c="dimmed" mb="md">
+          Checks each user database for columns that the current version doesn't support. These can appear when data was
+          created or restored by a different version of the app. Unsupported columns are ignored by this build but can be
+          removed to keep the databases clean.
+        </Text>
+        {!schemaHealth ? (
+          <Text size="sm" c="dimmed">Loading…</Text>
+        ) : schemaHealth.issues.length === 0 ? (
+          <Alert icon={<IconCheck size={16} />} color="green" variant="light">
+            All user databases match the current schema. No unsupported columns found.
+          </Alert>
+        ) : (
+          <Table withTableBorder withColumnBorders striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>User</Table.Th>
+                <Table.Th>DB schema</Table.Th>
+                <Table.Th>Unsupported columns</Table.Th>
+                <Table.Th w={90}></Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {schemaHealth.issues.map(issue => (
+                <Table.Tr key={issue.userId}>
+                  <Table.Td>
+                    <Text size="sm" fw={500}>{issue.username}</Text>
+                    {issue.error && <Text size="xs" c="red">{issue.error}</Text>}
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge size="sm" variant="light">v{issue.version}</Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {issue.tables.map(t => (
+                      <div key={t.table}>
+                        <Text size="xs" c="dimmed">{t.table}</Text>
+                        <Text size="xs">{t.extra.join(', ')}</Text>
+                      </div>
+                    ))}
+                    {issue.unknownTables?.length > 0 && (
+                      <Text size="xs" c="orange">Unknown tables: {issue.unknownTables.join(', ')}</Text>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Button
+                      size="compact-xs"
+                      color="red"
+                      variant="light"
+                      leftSection={<IconTrash size={12} />}
+                      loading={pruning === issue.userId}
+                      disabled={pruning !== null}
+                      onClick={() => doPrune(issue.userId, issue.username)}
+                    >
+                      Remove
+                    </Button>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
         )}
       </Paper>
     </Stack>

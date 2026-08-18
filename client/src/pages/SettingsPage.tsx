@@ -7,6 +7,8 @@ import { IconDownload, IconUpload, IconAlertTriangle, IconCheck, IconX, IconTras
 import { themes } from '../themes';
 import { api } from '../api/client';
 import type { ThemeKey } from '../themes';
+import type { ImportDiffReport, ImportOptions } from '../types';
+import ImportDiffModal from '../components/ImportDiffModal';
 
 export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: ThemeKey; onThemeChange: (k: ThemeKey) => void }) {
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
@@ -18,6 +20,9 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteOpened, { open: openDelete, close: closeDelete }] = useDisclosure(false);
+  const [diffOpen, { open: openDiff, close: closeDiff }] = useDisclosure(false);
+  const [diffReport, setDiffReport] = useState<ImportDiffReport | null>(null);
+  const [pendingData, setPendingData] = useState<any>(null);
 
   const handleExport = async () => {
     setExporting(true);
@@ -37,6 +42,21 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
     }
   };
 
+  const runImport = async (data: any, options?: ImportOptions) => {
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const res = await api.data.import(data, importMode, options);
+      setImportMsg({ type: 'ok', text: res.message });
+      setImportFile(null);
+      setConfirmText('');
+    } catch (err: any) {
+      setImportMsg({ type: 'error', text: err.message });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const handleImport = async () => {
     if (!importFile) return;
     if (importMode === 'replace' && confirmText !== 'i am sure') return;
@@ -48,15 +68,28 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
       const text = await importFile.text();
       const data = JSON.parse(text);
       if (!data.version) throw new Error('Invalid backup file.');
-      const res = await api.data.import(data, importMode);
-      setImportMsg({ type: 'ok', text: res.message });
-      setImportFile(null);
-      setConfirmText('');
+      const report = await api.data.importPreview(data);
+      const hasDiffs = report.totalMissing > 0 || report.totalExtra > 0 || report.unknownCollections.length > 0;
+      if (hasDiffs) {
+        setDiffReport(report);
+        setPendingData(data);
+        openDiff();
+        return;
+      }
+      await runImport(data);
     } catch (err: any) {
       setImportMsg({ type: 'error', text: err.message });
     } finally {
       setImporting(false);
     }
+  };
+
+  const handleImportConfirm = async (options: ImportOptions) => {
+    if (!pendingData) return;
+    closeDiff();
+    await runImport(pendingData, options);
+    setDiffReport(null);
+    setPendingData(null);
   };
 
   const handleDelete = async () => {
@@ -246,6 +279,16 @@ export default function SettingsPage({ themeKey, onThemeChange }: { themeKey: Th
           </Button>
         </Group>
       </Modal>
+
+      {diffReport && (
+        <ImportDiffModal
+          opened={diffOpen}
+          onClose={() => { closeDiff(); setDiffReport(null); setPendingData(null); }}
+          report={diffReport}
+          importing={importing}
+          onConfirm={handleImportConfirm}
+        />
+      )}
     </>
   );
 }

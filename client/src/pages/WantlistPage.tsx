@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Title, Group, Text, Paper, Badge, Button, TextInput, Textarea,
-  Modal, ActionIcon, LoadingOverlay, Box, Switch, SegmentedControl, Collapse, Select, Tooltip, Pagination,
+  Modal, ActionIcon, LoadingOverlay, Box, Switch, SegmentedControl, Collapse, Select, Tooltip, Pagination, NumberInput,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconSearch, IconChevronRight, IconChevronDown } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconSearch, IconChevronRight, IconChevronDown, IconFilter, IconArrowUp, IconArrowDown, IconX } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, GroupedCard, Condition, Location } from '../types';
@@ -18,6 +18,23 @@ const CONDITION_COLORS: Record<string, string> = {
   M: '#2e7d32', NM: '#00897b', LP: '#1565c0',
   MP: '#f9a825', HP: '#e65100', Dmg: '#c62828',
 };
+
+const CID_COLORS: Record<string, string> = {
+  W: '#f8d558', U: '#2a6fbf', B: '#444444', R: '#d33f2d', G: '#3f9c47', C: '#666666',
+};
+
+const CARD_TYPES = ['Creature', 'Instant', 'Sorcery', 'Enchantment', 'Artifact', 'Land', 'Planeswalker', 'Battle', 'Kindred'];
+const RARITIES: Array<[string, string]> = [['common', 'Common'], ['uncommon', 'Uncommon'], ['rare', 'Rare'], ['mythic', 'Mythic'], ['special', 'Special']];
+
+const SORT_OPTIONS: Array<[string, string]> = [
+  ['created', 'Date added'],
+  ['name', 'Name'],
+  ['price', 'Price'],
+  ['qty', 'Quantity'],
+  ['set', 'Set'],
+  ['condition', 'Condition'],
+  ['foil', 'Foil'],
+];
 
 interface WantlistItem {
   id: number; cardId: string | null; cardName: string;
@@ -51,20 +68,39 @@ export default function WantlistPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [collectionNames, setCollectionNames] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('created');
+  const [order, setOrder] = useState<'asc' | 'desc'>('desc');
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [showFilters, setShowFilters] = useState(false);
+  const [destFilter, setDestFilter] = useState<number | null>(null);
+  const [locationCounts, setLocationCounts] = useState<Record<number, number>>({});
 
   const loadItems = async (targetPage?: number) => {
     setLoading(true);
     try {
       const p = targetPage ?? page;
-      const [data, g, names] = await Promise.all([
-        api.wantlist.paged(p, 50),
+      const [data, g, names, all] = await Promise.all([
+        api.wantlist.paged(p, 50, {
+          q: query.trim() || undefined,
+          sort,
+          order,
+          destinationId: destFilter ?? undefined,
+          filters,
+        }),
         api.collectionGoals.list().catch(() => []),
         api.collection.names().catch(() => []),
+        api.wantlist.list().catch(() => []),
       ]);
       setItems(data.data);
       setTotalPages(data.totalPages);
       setGoals(g);
       setCollectionNames(new Set(names));
+      const counts: Record<number, number> = {};
+      for (const item of all) {
+        if (item.destinationId) counts[item.destinationId] = (counts[item.destinationId] || 0) + 1;
+      }
+      setLocationCounts(counts);
       for (const item of data.data) {
         if (item.cardId && !cardData[item.cardId]) {
           api.cards.get(item.cardId).then(c => {
@@ -80,6 +116,16 @@ export default function WantlistPage() {
   };
 
   useEffect(() => { loadItems(); }, []);
+
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    const timeout = setTimeout(() => { setPage(1); loadItems(1); }, 300);
+    return () => clearTimeout(timeout);
+  }, [query, sort, order, destFilter, filters]);
 
   useEffect(() => {
     if (search.trim().length < 2) { setResults([]); setPrintings({}); return; }
@@ -207,6 +253,29 @@ export default function WantlistPage() {
 
   const cardNames = results.map(g => g.name);
 
+  const toggleListFilter = (key: string, value: string) => {
+    setFilters(f => {
+      const n = { ...f };
+      const current = (n[key] || '').split(',').filter(Boolean);
+      if (current.includes(value)) {
+        const next = current.filter(x => x !== value);
+        if (next.length) n[key] = next.join(','); else delete n[key];
+      } else {
+        current.push(value);
+        n[key] = current.join(',');
+      }
+      return n;
+    });
+  };
+
+  const activeFilterCount = Object.keys(filters).length;
+
+  const locationTags = useMemo(() =>
+    Object.entries(locationCounts)
+      .map(([id, count]) => [Number(id), count] as [number, number])
+      .sort((a, b) => b[1] - a[1]),
+    [locationCounts]);
+
   return (
     <>
       <Group mb="md" justify="space-between">
@@ -214,11 +283,150 @@ export default function WantlistPage() {
         <Button leftSection={<IconPlus size={16} />} onClick={openAddDialog}>Add Card</Button>
       </Group>
 
+      <TextInput placeholder="Search wantlist by card name..." value={query}
+        onChange={e => setQuery(e.currentTarget.value)} leftSection={<IconSearch size={16} />}
+        mb="sm" size="sm" />
+
+      {locationTags.length > 0 && (
+        <Paper withBorder p="sm" mb="sm" radius="md">
+          <Text size="xs" fw={600} mb={6}>Locations</Text>
+          <Group gap={6}>
+            {locationTags.map(([id, count]) => {
+              const name = locations.find(l => l.id === id)?.name || `#${id}`;
+              const active = destFilter === id;
+              return (
+                <Badge key={id} size="sm" variant={active ? 'filled' : 'light'} color={active ? 'green' : 'gray'}
+                  style={{ cursor: 'pointer', textTransform: 'none' }}
+                  rightSection={<Text size="xs" style={{ fontWeight: 700 }}>{count}</Text>}
+                  onClick={() => setDestFilter(active ? null : id)}>
+                  {name}
+                </Badge>
+              );
+            })}
+            {destFilter != null && (
+              <ActionIcon size="xs" variant="subtle" color="red" onClick={() => setDestFilter(null)}><IconX size={12} /></ActionIcon>
+            )}
+          </Group>
+        </Paper>
+      )}
+
+      <Group mb="sm" gap="xs">
+        <Select size="xs" w={140} data={SORT_OPTIONS.map(([value, label]) => ({ value, label }))}
+          value={sort} onChange={v => setSort(v || 'created')} />
+        <ActionIcon variant="light" size="sm" onClick={() => setOrder(o => (o === 'asc' ? 'desc' : 'asc'))}>
+          {order === 'asc' ? <IconArrowUp size={14} /> : <IconArrowDown size={14} />}
+        </ActionIcon>
+        <Button size="compact-sm" variant={showFilters ? 'filled' : 'light'} onClick={() => setShowFilters(!showFilters)} leftSection={<IconFilter size={14} />}>
+          Filters {activeFilterCount > 0 ? `(${activeFilterCount})` : ''}
+        </Button>
+        {activeFilterCount > 0 && (
+          <Button size="compact-sm" variant="subtle" color="gray" onClick={() => setFilters({})}>Clear</Button>
+        )}
+      </Group>
+
+      <Collapse in={showFilters}>
+        <Paper withBorder p="sm" mb="sm" radius="md">
+          <Text size="xs" fw={600} mb={4}>Colors</Text>
+          <Group gap={4} mb="sm">
+            {['W', 'U', 'B', 'R', 'G', 'C'].map(c => {
+              const active = filters[`c_${c}`] === 'include';
+              return (
+                <Badge key={c} size="sm" variant={active ? 'filled' : 'light'} styles={{ label: { color: '#fff' } }}
+                  style={{ background: active ? CID_COLORS[c] : `${CID_COLORS[c] || '#666'}66`, cursor: 'pointer', boxShadow: active ? `0 0 0 2px var(--mantine-color-body), 0 0 0 4px ${CID_COLORS[c] || '#666'}` : undefined }}
+                  onClick={() => setFilters(f => {
+                    const n = { ...f };
+                    if (active) delete n[`c_${c}`];
+                    else n[`c_${c}`] = 'include';
+                    return n;
+                  })}
+                >{c}</Badge>
+              );
+            })}
+          </Group>
+          <Group gap="sm" mb="sm" align="flex-end">
+            <div>
+              <Text size="xs" fw={600} mb={2}>CMC Min</Text>
+              <NumberInput size="xs" w={70} min={0} max={30} value={filters.cmcMin ?? ''}
+                onChange={v => setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.cmcMin = String(v); else delete n.cmcMin; return n; })} />
+            </div>
+            <div>
+              <Text size="xs" fw={600} mb={2}>CMC Max</Text>
+              <NumberInput size="xs" w={70} min={0} max={30} value={filters.cmcMax ?? ''}
+                onChange={v => setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.cmcMax = String(v); else delete n.cmcMax; return n; })} />
+            </div>
+            <div>
+              <Text size="xs" fw={600} mb={2}>Value Min ($)</Text>
+              <NumberInput size="xs" w={80} min={0} decimalScale={2} value={filters.valueMin ?? ''}
+                onChange={v => setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.valueMin = String(v); else delete n.valueMin; return n; })} />
+            </div>
+            <div>
+              <Text size="xs" fw={600} mb={2}>Value Max ($)</Text>
+              <NumberInput size="xs" w={80} min={0} decimalScale={2} value={filters.valueMax ?? ''}
+                onChange={v => setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.valueMax = String(v); else delete n.valueMax; return n; })} />
+            </div>
+          </Group>
+          <Group gap="lg" mb="sm" align="flex-start">
+            <div>
+              <Text size="xs" fw={600} mb={2}>Type</Text>
+              <Group gap={4}>
+                {CARD_TYPES.map(t => {
+                  const active = (filters.type || '').split(',').includes(t);
+                  return (
+                    <Badge key={t} size="sm" variant={active ? 'filled' : 'outline'} color={active ? 'blue' : 'gray'}
+                      style={{ cursor: 'pointer', textTransform: 'none' }} onClick={() => toggleListFilter('type', t)}>{t}</Badge>
+                  );
+                })}
+              </Group>
+            </div>
+            <div>
+              <Text size="xs" fw={600} mb={2}>Rarity</Text>
+              <Group gap={4}>
+                {RARITIES.map(([k, label]) => {
+                  const active = (filters.rarity || '').split(',').includes(k);
+                  return (
+                    <Badge key={k} size="sm" variant={active ? 'filled' : 'outline'} color={active ? 'blue' : 'gray'}
+                      style={{ cursor: 'pointer', textTransform: 'none' }} onClick={() => toggleListFilter('rarity', k)}>{label}</Badge>
+                  );
+                })}
+              </Group>
+            </div>
+            <div>
+              <Text size="xs" fw={600} mb={2}>Condition</Text>
+              <Group gap={4}>
+                {['M', 'NM', 'LP', 'MP', 'HP', 'Dmg'].map(cond => {
+                  const active = (filters.condition || '').split(',').includes(cond);
+                  return (
+                    <Badge key={cond} size="sm" variant={active ? 'filled' : 'outline'} color={active ? 'blue' : 'gray'}
+                      style={{ cursor: 'pointer', textTransform: 'none' }} onClick={() => toggleListFilter('condition', cond)}>{cond}</Badge>
+                  );
+                })}
+              </Group>
+            </div>
+          </Group>
+          <Switch size="xs" label="Foil only" checked={filters.foil === '1'}
+            onChange={e => { const v = e.currentTarget.checked; setFilters(f => { const n = { ...f }; if (v) n.foil = '1'; else delete n.foil; return n; }); }} />
+        </Paper>
+      </Collapse>
+
       <Box pos="relative" data-tour="wantlist-list">
         <LoadingOverlay visible={loading} />
 
         {items.length === 0 && !loading && (
           <Text c="dimmed" ta="center" py="xl">Your wantlist is empty. Click "Add Card" to add cards you're looking for.</Text>
+        )}
+
+        {items.length > 0 && (
+          <Group p="sm" gap="sm" wrap="nowrap" mb={2} style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
+            <Box w={32} h={45} style={{ flexShrink: 0 }} />
+            <Text size="xs" fw={700} c="dimmed" style={{ flex: 1 }}>Name</Text>
+            <Text size="xs" fw={700} c="dimmed" w={90} ta="center">Destination</Text>
+            <Text size="xs" fw={700} c="dimmed" w={90} ta="center">Collection</Text>
+            <Text size="xs" fw={700} c="dimmed" w={46} ta="center">Foil</Text>
+            <Text size="xs" fw={700} c="dimmed" w={46} ta="center">Cond</Text>
+            <Text size="xs" fw={700} c="dimmed" w={70} ta="right">Price</Text>
+            <Text size="xs" fw={700} c="dimmed" w={80} ta="center">Added</Text>
+            <Box style={{ width: 88, flexShrink: 0 }} />
+          </Group>
         )}
 
         {items.length > 0 && (() => {
@@ -254,31 +462,35 @@ export default function WantlistPage() {
                   )}
                   {item.notes && <Text size="xs" c="dimmed" lineClamp={1}>{item.notes}</Text>}
                 </div>
-                {item.destinationId && (
-                  <Badge size="xs" variant="light" color="green" w={90}>
-                    → {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}
-                  </Badge>
-                )}
-                {item.collectionGoalId && (
-                  <Tooltip label={`Part of a collection (${goals.find(g => g.id === item.collectionGoalId)?.locationName || ''})`}>
-                    <Badge size="xs" color="teal" variant="light">
-                      {(() => {
-                        const g = goals.find(x => x.id === item.collectionGoalId);
-                        if (!g) return 'Collection';
-                        return g.targetCount != null ? `${g.fulfilledCount}/${g.targetCount}` : 'Perpetual';
-                      })()}
+                <Box style={{ width: 90, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                  {item.destinationId && (
+                    <Badge size="xs" variant="light" color="green">
+                      {locations.find(l => l.id === item.destinationId)?.name || `#${item.destinationId}`}
                     </Badge>
-                  </Tooltip>
-                )}
-                <Text size="xs" w={46}>{item.foil ? '✦' : 'N'}</Text>
-                <Badge size="xs" variant="outline" color="gray" w={46}>{item.condition || '-'}</Badge>
-                <Text size="xs" w={70}>
+                  )}
+                </Box>
+                <Box style={{ width: 90, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                  {item.collectionGoalId && (
+                    <Tooltip label={`Part of a collection (${goals.find(g => g.id === item.collectionGoalId)?.locationName || ''})`}>
+                      <Badge size="xs" color="teal" variant="light">
+                        {(() => {
+                          const g = goals.find(x => x.id === item.collectionGoalId);
+                          if (!g) return 'Collection';
+                          return g.targetCount != null ? `${g.fulfilledCount}/${g.targetCount}` : 'Perpetual';
+                        })()}
+                      </Badge>
+                    </Tooltip>
+                  )}
+                </Box>
+                <Text size="xs" w={46} ta="center">{item.foil ? '✦' : 'N'}</Text>
+                <Badge size="xs" variant="outline" color="gray" w={46} ta="center">{item.condition || '-'}</Badge>
+                <Text size="xs" w={70} ta="right">
                   {item.cardId ? (() => {
                     const p = getCardPrice(item);
                     return p !== null ? `$${p.toFixed(2)}` : '-';
                   })() : '-'}
                 </Text>
-                <Text size="xs" c="dimmed" w={80}>{item.createdAt?.slice(0, 10)}</Text>
+                <Text size="xs" c="dimmed" w={80} ta="center">{item.createdAt?.slice(0, 10)}</Text>
                 <WantlistFulfilActions item={item} locations={locations}
                   hasInternal={collectionNames.has(item.cardName)}
                   onDone={() => loadItems()} />

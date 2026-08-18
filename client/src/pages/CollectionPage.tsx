@@ -10,7 +10,7 @@ import { IconTrash, IconArrowRight, IconSearch, IconPencil, IconFilter, IconMapP
 import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { Location, LocationGroup, CollectionItem, Condition } from '../types';
-import { CardThumb, SetSymbol, Tags, ManaCost, GhostThumb } from '../components/CardDisplay';
+import { CardThumb, SetSymbol, Tags, CopyTags, ManaCost, GhostThumb } from '../components/CardDisplay';
 import { CardGroup } from '../components/CardGroup';
 import { WantlistFulfilActions } from '../components/WantlistFulfil';
 
@@ -74,6 +74,7 @@ const ItemRow = memo(function ItemRow({ row, selected, locations, onToggle, onEd
         <Group gap={4} wrap="nowrap">
           <Text size="sm" fw={500}>{item.card.name}</Text>
           <Tags card={item.card} />
+          <CopyTags item={item} />
         </Group>
         <Group gap={6}>
           <ManaCost manaCost={item.card.manaCost} />
@@ -219,7 +220,7 @@ export default function CollectionPage() {
   const [editItem, setEditItem] = useState<CollectionItem | null>(null);
   const [editOpened, { open: openEdit, close: closeEdit }] = useDisclosure(false);
   const [deleteConfirmOpened, { open: openDeleteConfirm, close: closeDeleteConfirm }] = useDisclosure(false);
-  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', packOpened: false, notes: '' });
+  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '' });
   const [editDestLoc, setEditDestLoc] = useState<string | null>(null);
   const [destOpened, { open: openDest, close: closeDest }] = useDisclosure(false);
   const [destItem, setDestItem] = useState<CollectionItem | null>(null);
@@ -568,6 +569,9 @@ export default function CollectionPage() {
       condition: (item.condition || '') as Condition | '',
       purchasePrice: item.purchasePrice ? String(item.purchasePrice) : '',
       packOpened: !!item.packOpened,
+      proxy: !!item.proxy,
+      misprint: !!item.misprint,
+      altered: !!item.altered,
       notes: item.notes || '',
     });
     openEdit();
@@ -604,6 +608,9 @@ export default function CollectionPage() {
         condition: editForm.condition || null,
         purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null,
         packOpened: editForm.packOpened ? 1 : 0,
+        proxy: editForm.proxy ? 1 : 0,
+        misprint: editForm.misprint ? 1 : 0,
+        altered: editForm.altered ? 1 : 0,
         notes: editForm.notes || null,
         destinationId: destId,
       } as any);
@@ -1205,6 +1212,11 @@ export default function CollectionPage() {
             </Box>
             <TextInput label="Purchase Price ($)" value={editForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, purchasePrice: v })); }} mb="sm" />
             <Switch label="Pack Opened" checked={editForm.packOpened} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, packOpened: v })); }} mb="sm" />
+            <Group gap="sm" mb="sm">
+              <Switch label="Proxy" checked={editForm.proxy} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, proxy: v })); }} />
+              <Switch label="Misprint" checked={editForm.misprint} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, misprint: v })); }} />
+              <Switch label="Altered" checked={editForm.altered} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, altered: v })); }} />
+            </Group>
             <TextInput label="Notes" value={editForm.notes} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, notes: v })); }} mb="sm" />
             <Select label="Destination (optional)" placeholder="No destination" clearable
               data={locations.map(l => ({ value: String(l.id), label: l.name }))}

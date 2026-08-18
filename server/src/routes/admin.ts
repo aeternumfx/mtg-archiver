@@ -20,6 +20,8 @@ import { createBackupZip } from '../services/backup';
 import { appVersion, autoUpdateAvailable, checkForUpdates, runAutoUpdate } from '../services/updates';
 import { restoreFromBackup } from '../services/restore';
 import { dataDir, userDbPath } from '../db/paths';
+import { getUserSqlite } from '../db';
+import { auditUserSchema, pruneExtraColumns, SCHEMA_VERSION } from '../db/schemaAudit';
 
 const uploadsDir = path.join(dataDir, '.uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
@@ -31,6 +33,49 @@ adminRouter.use(requireAdmin);
 
 adminRouter.get('/overview', (_req, res) => {
   res.json(adminStats());
+});
+
+adminRouter.get('/db-schema', (_req, res) => {
+  const issues = listUsers()
+    .map(u => {
+      let audit;
+      try {
+        audit = auditUserSchema(getUserSqlite(u.id));
+      } catch (err: any) {
+        return { userId: u.id, username: u.username, version: 0, error: err?.message ?? String(err) };
+      }
+      const tables = audit.tables
+        .filter(t => t.extra.length > 0)
+        .map(t => ({ table: t.table, extra: t.extra }));
+      return {
+        userId: u.id,
+        username: u.username,
+        version: audit.version,
+        tables,
+        unknownTables: audit.unknownTables,
+        error: null,
+      };
+    })
+    .filter(r => (r.tables && r.tables.length > 0) || (r.unknownTables && r.unknownTables.length > 0) || r.error);
+  res.json({ schemaVersion: SCHEMA_VERSION, issues });
+});
+
+adminRouter.post('/db-schema/prune', (req, res) => {
+  const userId = Number(req.body?.userId);
+  const user = getUserById(userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  try {
+    const result = pruneExtraColumns(getUserSqlite(userId));
+    res.json({
+      message: result.removed.length
+        ? `Removed ${result.removed.length} unsupported column(s) for ${user.username}.`
+        : `No removable unsupported columns found for ${user.username}.`,
+      removed: result.removed,
+      errors: result.errors,
+    });
+  } catch (err: any) {
+    fail(res, err);
+  }
 });
 
 adminRouter.get('/stats', (_req, res) => {

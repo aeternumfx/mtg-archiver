@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Title, Paper, Group, Text, TextInput, Button, Avatar, SimpleGrid, Stack,
-  Loader, Alert, Tooltip, Box, Modal, ActionIcon, Divider, Badge,
+  Loader, Alert, Tooltip, Box, Modal, ActionIcon, Divider, Badge, SegmentedControl, PasswordInput, Code,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconSearch, IconCheck, IconPencil, IconTrash } from '@tabler/icons-react';
+import { IconSearch, IconCheck, IconPencil, IconTrash, IconCopy } from '@tabler/icons-react';
 import { useAuth } from '../auth/AuthContext';
 import { api } from '../api/client';
 import type { GroupedCard } from '../types';
@@ -142,8 +142,57 @@ export default function ProfilePage() {
     ? !!user?.avatar
     : selection !== null;
 
+  const [privacy, setPrivacy] = useState({ collectionPrivacy: 'private', wantlistPrivacy: 'private' });
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [privacyLoading, setPrivacyLoading] = useState(true);
+  const [privacySaving, setPrivacySaving] = useState(false);
+  const [privacyMsg, setPrivacyMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
+  const [colPassword, setColPassword] = useState('');
+  const [wantPassword, setWantPassword] = useState('');
+
+  useEffect(() => {
+    api.privacy.get()
+      .then(p => {
+        setPrivacy({ collectionPrivacy: p.collectionPrivacy, wantlistPrivacy: p.wantlistPrivacy });
+        setShareToken(p.shareToken);
+      })
+      .catch(() => setPrivacyMsg({ type: 'error', text: 'Failed to load privacy settings' }))
+      .finally(() => setPrivacyLoading(false));
+  }, []);
+
+  const savePrivacy = async () => {
+    setPrivacySaving(true);
+    setPrivacyMsg(null);
+    try {
+      const data: Record<string, any> = { collectionPrivacy: privacy.collectionPrivacy, wantlistPrivacy: privacy.wantlistPrivacy };
+      if (privacy.collectionPrivacy === 'password' && colPassword.trim()) data.collectionPassword = colPassword.trim();
+      if (privacy.wantlistPrivacy === 'password' && wantPassword.trim()) data.wantlistPassword = wantPassword.trim();
+      const res = await api.privacy.update(data);
+      setPrivacy({ collectionPrivacy: res.collectionPrivacy, wantlistPrivacy: res.wantlistPrivacy });
+      setShareToken(res.shareToken);
+      setPrivacyMsg({ type: 'ok', text: 'Privacy settings saved.' });
+      setColPassword('');
+      setWantPassword('');
+    } catch (err: any) {
+      setPrivacyMsg({ type: 'error', text: err.message || 'Failed to save' });
+    } finally {
+      setPrivacySaving(false);
+    }
+  };
+
+  const shareLink = shareToken ? `${window.location.origin}/share/${shareToken}` : '';
+  const copyShare = async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink);
+      setPrivacyMsg({ type: 'ok', text: 'Share link copied to clipboard.' });
+    } catch {
+      setPrivacyMsg({ type: 'error', text: 'Could not copy. Select the link manually.' });
+    }
+  };
+
   return (
-    <Paper withBorder p="lg" radius="md" maw={860}>
+    <Stack maw={860}>
+    <Paper withBorder p="lg" radius="md">
       <Group align="flex-start" wrap="nowrap" gap="xl">
         <Box style={{ position: 'relative', flexShrink: 0 }}>
           <Avatar radius="xl" size={120} color="blue" src={user?.avatar || undefined}>
@@ -301,5 +350,77 @@ export default function ProfilePage() {
         </Stack>
       </Modal>
     </Paper>
+
+      <Paper withBorder p="lg" radius="md">
+        <Group justify="space-between" mb="md">
+          <Title order={3}>Sharing & Privacy</Title>
+          <Button size="compact-sm" onClick={savePrivacy} loading={privacySaving}>Save</Button>
+        </Group>
+        <Text size="sm" c="dimmed" mb="lg">
+          Control how your Collection and Wantlist can be seen by friends. You can share a link, and optionally
+          protect each view with a password. Shared views are read-only.
+        </Text>
+
+        {privacyMsg && (
+          <Alert color={privacyMsg.type === 'ok' ? 'green' : 'red'} mb="md" withCloseButton onClose={() => setPrivacyMsg(null)}>
+            {privacyMsg.text}
+          </Alert>
+        )}
+
+        {privacyLoading ? (
+          <Group justify="center" py="lg"><Loader size="sm" /></Group>
+        ) : (
+          <>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg" mb="xl">
+              <Box>
+                <Text size="sm" fw={600} mb={6}>Collection</Text>
+                <SegmentedControl fullWidth mb="sm"
+                  value={privacy.collectionPrivacy}
+                  onChange={v => setPrivacy(p => ({ ...p, collectionPrivacy: v }))}
+                  data={[
+                    { value: 'public', label: 'Public' },
+                    { value: 'password', label: 'Password' },
+                    { value: 'private', label: 'Private' },
+                  ]} />
+                {privacy.collectionPrivacy === 'password' && (
+                  <PasswordInput placeholder="Set a password for your collection" value={colPassword}
+                    onChange={e => setColPassword(e.currentTarget.value)} size="sm" />
+                )}
+              </Box>
+              <Box>
+                <Text size="sm" fw={600} mb={6}>Wantlist</Text>
+                <SegmentedControl fullWidth mb="sm"
+                  value={privacy.wantlistPrivacy}
+                  onChange={v => setPrivacy(p => ({ ...p, wantlistPrivacy: v }))}
+                  data={[
+                    { value: 'public', label: 'Public' },
+                    { value: 'password', label: 'Password' },
+                    { value: 'private', label: 'Private' },
+                  ]} />
+                {privacy.wantlistPrivacy === 'password' && (
+                  <PasswordInput placeholder="Set a password for your wantlist" value={wantPassword}
+                    onChange={e => setWantPassword(e.currentTarget.value)} size="sm" />
+                )}
+              </Box>
+            </SimpleGrid>
+
+            <Divider mb="lg" />
+
+            <Text size="sm" fw={600} mb={4}>Your share link</Text>
+            <Text size="xs" c="dimmed" mb="sm">
+              Share this link with friends. It reveals only what you've made public.
+            </Text>
+            {shareLink ? (
+              <Group gap="sm" align="center" wrap="nowrap">
+                <Code style={{ flex: 1, wordBreak: 'break-all' }}>{shareLink}</Code>
+                <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />} onClick={copyShare}>Copy</Button>
+              </Group>
+            ) : (
+              <Text size="xs" c="dimmed">Set Collection or Wantlist to Public or Password to generate a share link.</Text>
+            )}
+          </>
+        )}
+      </Paper>
+    </Stack>
   );
 }

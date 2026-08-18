@@ -100,6 +100,9 @@ export interface CollectionItem {
   purchasePrice: number | null;
   priceAutofilled: number;
   packOpened: number;
+  proxy?: number;
+  misprint?: number;
+  altered?: number;
   notes: string | null;
   acquiredAt: string | null;
   createdAt: string;
@@ -139,3 +142,46 @@ export interface SyncStatus {
 
 export const CONDITIONS = ['M', 'NM', 'LP', 'MP', 'HP', 'Dmg'] as const;
 export type Condition = typeof CONDITIONS[number];
+
+export interface MissingField {
+  field: string;
+  type: 'text' | 'integer' | 'real';
+  suggested: unknown;
+  required: boolean;
+}
+
+export interface CollectionDiff {
+  present: boolean;
+  count: number;
+  missing: MissingField[];
+  extra: string[];
+}
+
+export interface ImportDiffReport {
+  version: number | null;
+  exportedAt: string | null;
+  unknownCollections: string[];
+  collections: Record<string, CollectionDiff>;
+  totalMissing: number;
+  totalExtra: number;
+}
+
+export interface ImportOptions {
+  collections?: string[];
+  missingDefaults?: Record<string, Record<string, unknown>>;
+  dropExtra?: boolean | string[];
+}
+
+export interface DbSchemaIssue {
+  userId: number;
+  username: string;
+  version: number;
+  tables: Array<{ table: string; extra: string[] }>;
+  unknownTables: string[];
+  error: string | null;
+}
+
+export interface DbSchemaHealth {
+  schemaVersion: number;
+  issues: DbSchemaIssue[];
+}

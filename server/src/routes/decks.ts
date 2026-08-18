@@ -1,8 +1,9 @@
 import { fail } from '../utils/http';
 import { Router } from 'express';
-import { db, sqlite, schema } from '../db';
+import { db, sqlite, schema, catalogSqlite } from '../db';
 import { eq, and, sql } from 'drizzle-orm';
 import { cardById, cardsByIds, parseCardJson } from '../services/cards';
+import { parseDecklist, type DeckImportEntry } from '../services/decklistParser';
 
 export const decksRouter = Router();
 
@@ -15,6 +16,189 @@ function findGhostWantlist(reqId: number, cardName: string): { id: number } | un
   return sqlite.prepare("SELECT id FROM wantlist_items WHERE card_name = ? AND notes LIKE 'Wanted for deck: %' ORDER BY created_at DESC LIMIT 1")
     .get(cardName) as { id: number } | undefined;
 }
+
+function resolvePrinting(name: string, setCode: string | null, collectorNumber: string | null): { cardId: string; canonicalName: string } | null {
+  const trimmed = name.trim().toLowerCase();
+  if (setCode && collectorNumber) {
+    const row = catalogSqlite.prepare(
+      `SELECT id, name FROM scryfall_cards WHERE lower(set_code) = ? AND lower(collector_number) = ? AND lower(name) = ? LIMIT 1`
+    ).get(setCode.toLowerCase(), collectorNumber.toLowerCase(), trimmed) as { id: string; name: string } | undefined;
+    if (row) return { cardId: row.id, canonicalName: row.name };
+  }
+  return null;
+}
+
+function resolveByName(name: string): { cardId: string; canonicalName: string } | null {
+  const lower = name.trim().toLowerCase().replace(/([%_])/g, '\\$1');
+  const row = catalogSqlite.prepare(
+    `SELECT id, name FROM scryfall_cards
+     WHERE lower(name) = ? OR lower(name) LIKE ? ESCAPE '\\'
+     ORDER BY released_at DESC LIMIT 1`
+  ).get(lower, `${lower} // %`) as { id: string; name: string } | undefined;
+  return row ? { cardId: row.id, canonicalName: row.name } : null;
+}
+
+function isPartnerCard(oracleText: string | null): boolean {
+  return !!oracleText && /you can have two commanders if both have partner/i.test(oracleText);
+}
+
+function isBackgroundCard(typeLine: string | null, oracleText: string | null): boolean {
+  return (!!typeLine && /background/i.test(typeLine)) || (!!oracleText && /choose a background/i.test(oracleText));
+}
+
+decksRouter.post('/import', (req, res) => {
+  const { name, description, deckType, content, format } = req.body || {};
+  const deckName = (name || '').trim();
+  if (!deckName) return res.status(400).json({ error: 'Name is required' });
+  if (typeof content !== 'string' || !content.trim()) return res.status(400).json({ error: 'No decklist content provided' });
+  if (content.length > 1_000_000) return res.status(413).json({ error: 'Decklist is too large' });
+
+  let entries: DeckImportEntry[];
+  try {
+    entries = parseDecklist(content, format);
+  } catch (err: any) {
+    return res.status(400).json({ error: `Could not parse decklist: ${err.message}` });
+  }
+  if (entries.length === 0) return res.status(400).json({ error: 'No cards found in the decklist' });
+
+  try {
+    // Validate every card actually exists in the catalog before creating anything.
+    const unknown: string[] = [];
+    const validated: Array<{ entry: DeckImportEntry; nameHit: { cardId: string; canonicalName: string } }> = [];
+    for (const entry of entries) {
+      const nameHit = resolveByName(entry.name);
+      if (!nameHit) {
+        unknown.push(entry.name);
+        continue;
+      }
+      validated.push({ entry, nameHit });
+    }
+    if (unknown.length > 0) {
+      const shown = unknown.slice(0, 8).join(', ');
+      const more = unknown.length > 8 ? ` and ${unknown.length - 8} more` : '';
+      return res.status(400).json({
+        error: `Could not find ${unknown.length} card(s) in the card database: ${shown}${more}. No cards were imported.`,
+        unknown,
+      });
+    }
+
+    const result = sqlite.transaction(() => {
+      const deck = db.insert(schema.decks)
+        .values({
+          name: deckName,
+          description: description ?? null,
+          deckType: deckType ?? 'custom',
+        })
+        .returning().get() as { id: number; name: string; cardId: string | null };
+
+      let loc: { id: number } | null = null;
+      try {
+        loc = db.insert(schema.locations)
+          .values({
+            name: deckName,
+            description: description ? `Deck location for ${deckName}` : null,
+            type: 'deck',
+            groupId: null,
+            deckId: deck.id,
+          })
+          .returning().get();
+      } catch (err: any) {
+        if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+          throw new Error(`A location named "${deckName}" already exists. Rename the deck or that location.`);
+        }
+        throw err;
+      }
+
+      let importedQuantity = 0;
+      let commanderCardId: string | null = null;
+      let partnerCardId: string | null = null;
+      let backgroundCardId: string | null = null;
+      const zoneCards: Array<{ slotCardId: string; cardName: string; role: NonNullable<DeckImportEntry['role']> }> = [];
+
+      for (const { entry, nameHit } of validated) {
+        let cardId: string | null = null;
+        let cardName = nameHit.canonicalName;
+        let setCode = entry.setCode;
+        let collectorNumber = entry.collectorNumber;
+        if (entry.setCode && entry.collectorNumber) {
+          const resolved = resolvePrinting(entry.name, entry.setCode, entry.collectorNumber);
+          if (resolved) {
+            cardId = resolved.cardId;
+            cardName = resolved.canonicalName;
+          }
+        }
+
+        const created = db.insert(schema.deckRequiredCards)
+          .values({
+            deckId: deck.id,
+            cardId,
+            cardName,
+            setCode,
+            collectorNumber,
+            quantity: entry.quantity,
+          })
+          .returning().get();
+        db.insert(schema.wantlistItems)
+          .values({
+            cardId,
+            cardName,
+            setCode,
+            collectorNumber,
+            quantity: entry.quantity,
+            notes: `Wanted for deck: ${deckName}`,
+            destinationId: loc?.id ?? null,
+            deckRequiredId: created.id,
+          })
+          .run();
+        importedQuantity += entry.quantity;
+
+        if (entry.role === 'commander' || entry.role === 'partner' || entry.role === 'background') {
+          zoneCards.push({ slotCardId: cardId ?? nameHit.cardId, cardName, role: entry.role });
+        }
+      }
+
+      // Assign the command zone from section/tag roles.
+      const commanders = zoneCards.filter(c => c.role === 'commander');
+      if (commanders.length > 0) {
+        commanderCardId = commanders[0].slotCardId;
+        for (const extra of commanders.slice(1)) {
+          const card = cardById(extra.slotCardId);
+          if (!card) continue;
+          if (isPartnerCard(card?.oracleText ?? null)) partnerCardId ??= extra.slotCardId;
+          else if (isBackgroundCard(card?.typeLine ?? null, card?.oracleText ?? null)) backgroundCardId ??= extra.slotCardId;
+        }
+      }
+      for (const c of zoneCards) {
+        if (c.role === 'partner') partnerCardId ??= c.slotCardId;
+        if (c.role === 'background') backgroundCardId ??= c.slotCardId;
+      }
+
+      if (commanderCardId || partnerCardId || backgroundCardId) {
+        db.update(schema.decks)
+          .set({
+            ...(commanderCardId ? { commanderCardId } : {}),
+            ...(partnerCardId ? { partnerCardId } : {}),
+            ...(backgroundCardId ? { backgroundCardId } : {}),
+            ...(commanderCardId && !deck.cardId ? { cardId: commanderCardId } : {}),
+          })
+          .where(eq(schema.decks.id, deck.id))
+          .run();
+      }
+
+      const finalDeck = db.select().from(schema.decks).where(eq(schema.decks.id, deck.id)).get();
+      return { deck: finalDeck!, loc, importedQuantity, uniqueCards: entries.length, commanders: zoneCards.map(c => c.cardName) };
+    })();
+
+    res.status(201).json({
+      deck: { ...result.deck, cardCount: 0, locationId: result.loc?.id ?? null },
+      importedCards: result.importedQuantity,
+      uniqueCards: result.uniqueCards,
+      commanders: result.commanders,
+    });
+  } catch (err: any) {
+    fail(res, err);
+  }
+});
 
 decksRouter.get('/', (_req, res) => {
   const allDecks = db.select().from(schema.decks).orderBy(schema.decks.name).all();
@@ -150,6 +334,12 @@ decksRouter.delete('/:id', (req, res) => {
         db.delete(schema.locations).where(eq(schema.locations.id, loc.id)).run();
       }
 
+      const ghostRows = sqlite.prepare('SELECT id FROM deck_required_cards WHERE deck_id = ?').all(id) as Array<{ id: number }>;
+      for (const g of ghostRows) {
+        sqlite.prepare('DELETE FROM wantlist_items WHERE deck_required_id = ?').run(g.id);
+      }
+      sqlite.prepare('DELETE FROM deck_required_cards WHERE deck_id = ?').run(id);
+
       db.delete(schema.decks).where(eq(schema.decks.id, id)).run();
     })();
     res.status(204).end();
@@ -171,6 +361,9 @@ decksRouter.get('/:id/cards', (req, res) => {
     purchasePrice: schema.collectionItems.purchasePrice,
     priceAutofilled: schema.collectionItems.priceAutofilled,
     packOpened: schema.collectionItems.packOpened,
+    proxy: schema.collectionItems.proxy,
+    misprint: schema.collectionItems.misprint,
+    altered: schema.collectionItems.altered,
     notes: schema.collectionItems.notes,
     acquiredAt: schema.collectionItems.acquiredAt,
     createdAt: schema.collectionItems.createdAt,
@@ -244,7 +437,11 @@ decksRouter.post('/:id/link', (req, res) => {
     const deckLoc = getDeckLocation(deckId);
     if (!deckLoc) return res.status(400).json({ error: 'Deck has no location' });
     db.update(schema.collectionItems)
-      .set({ deckId, destinationId: schedule ? deckLoc.id : null })
+      .set({
+        deckId,
+        locationId: schedule ? item.locationId : deckLoc.id,
+        destinationId: schedule ? deckLoc.id : null,
+      })
       .where(eq(schema.collectionItems.id, item.id))
       .run();
     res.json({ message: 'Card added to deck from collection' });
@@ -435,6 +632,122 @@ decksRouter.post('/:id/required/:reqId/move', (req, res) => {
     res.status(400).json({ error: 'destinationType must be "location" or "deck"' });
   } catch (err: any) {
     fail(res, err);
+  }
+});
+
+decksRouter.post('/:id/required/:reqId/fill-external', (req, res) => {
+  const deckId = Number(req.params.id);
+  const reqId = Number(req.params.reqId);
+  const {
+    cardId: chosenCardId, foil, condition, quantity,
+    purchasePrice, packOpened, notes, locationId, destinationId,
+  } = req.body || {};
+
+  const httpError = (status: number, message: string) => {
+    const err = new Error(message) as Error & { status: number };
+    err.status = status;
+    return err;
+  };
+
+  try {
+    const result = sqlite.transaction(() => {
+      const ghost = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
+      if (!ghost || ghost.deckId !== deckId) throw httpError(404, 'Ghost card not found');
+      const deckLoc = getDeckLocation(deckId);
+      if (!deckLoc) throw httpError(400, 'Deck has no location');
+      const loc = locationId == null ? deckLoc : (
+        db.select().from(schema.locations).where(eq(schema.locations.id, Number(locationId))).get() ?? null
+      );
+      if (!loc) throw httpError(400, 'Location not found');
+
+      // Validate an optional scheduled-move destination.
+      let resolvedDest: number | null = null;
+      if (destinationId !== undefined && destinationId !== null) {
+        const dest = db.select().from(schema.locations).where(eq(schema.locations.id, Number(destinationId))).get();
+        if (!dest) throw httpError(400, 'Destination location not found');
+        resolvedDest = dest.id;
+      }
+
+      let cardId = chosenCardId || ghost.cardId || null;
+      if (!cardId) {
+        const resolved = (ghost.setCode && ghost.collectorNumber)
+          ? resolvePrinting(ghost.cardName, ghost.setCode, ghost.collectorNumber)
+          : null;
+        cardId = resolved?.cardId ?? resolveByName(ghost.cardName)?.cardId ?? null;
+      }
+      if (!cardId) throw httpError(400, `Could not resolve "${ghost.cardName}" to a card`);
+      const card = cardById(cardId);
+      if (!card) throw httpError(400, 'Selected printing not found');
+
+      const rawQty = Math.floor(Number(quantity));
+      const qty = Number.isFinite(rawQty) && rawQty > 0
+        ? Math.min(rawQty, 999)
+        : Math.min(ghost.quantity || 1, 999);
+
+      // Price: use the supplied value, otherwise autofill the market value of the chosen printing.
+      let price: number | null = null;
+      let autofilled = 0;
+      if (purchasePrice !== undefined && purchasePrice !== null && purchasePrice !== '') {
+        const parsed = parseFloat(String(purchasePrice));
+        if (!isNaN(parsed)) {
+          price = parsed;
+        }
+      }
+      if (price === null) {
+        let cardPrices: Record<string, any> = {};
+        try { cardPrices = JSON.parse(card.prices ?? '{}'); } catch { cardPrices = {}; }
+        const usd = foil ? (cardPrices.usd_foil ?? cardPrices.usd) : (cardPrices.usd ?? cardPrices.usd_foil);
+        if (usd) {
+          price = parseFloat(usd);
+          autofilled = 1;
+        }
+      }
+
+      // Cancel any pending scheduled move that was filling this ghost.
+      if (ghost.fillItemId) {
+        db.update(schema.collectionItems)
+          .set({ destinationId: null })
+          .where(eq(schema.collectionItems.id, ghost.fillItemId))
+          .run();
+      }
+
+      const item = db.insert(schema.collectionItems)
+        .values({
+          cardId,
+          locationId: loc.id,
+          deckId,
+          destinationId: resolvedDest,
+          foil: foil ? 1 : 0,
+          condition: condition ?? null,
+          quantity: qty,
+          purchasePrice: price,
+          priceAutofilled: autofilled,
+          packOpened: packOpened ? 1 : 0,
+          notes: notes ?? null,
+        })
+        .returning().get() as { id: number };
+
+      // If this ghost filled a command-zone slot, bind that slot to the new copy.
+      const deck = db.select().from(schema.decks).where(eq(schema.decks.id, deckId)).get();
+      if (deck) {
+        const updates: Record<string, any> = {};
+        if (deck.commanderCardId === cardId) updates.commanderItemId = item.id;
+        if (deck.partnerCardId === cardId) updates.partnerItemId = item.id;
+        if (deck.backgroundCardId === cardId) updates.backgroundItemId = item.id;
+        if (Object.keys(updates).length > 0) {
+          db.update(schema.decks).set(updates).where(eq(schema.decks.id, deckId)).run();
+        }
+      }
+
+      const wl = findGhostWantlist(ghost.id, ghost.cardName);
+      if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+      db.delete(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, ghost.id)).run();
+
+      return { item, removedGhost: ghost };
+    })();
+    res.status(201).json(result);
+  } catch (err: any) {
+    fail(res, err, typeof err?.status === 'number' ? err.status : 500);
   }
 });
 

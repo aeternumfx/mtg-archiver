@@ -20,6 +20,9 @@ interface PrintingForm {
   condition: Condition | '';
   purchasePrice: string;
   packOpened: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  altered: boolean;
   notes: string;
 }
 
@@ -42,7 +45,7 @@ const PRINTINGS_PER_PAGE = 25;
 
 const defaultForm = (): PrintingForm => ({
   selected: false, quantity: 1, foil: false, condition: 'NM' as Condition,
-  purchasePrice: '', packOpened: false, notes: '',
+  purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '',
 });
 
 function InvalidBubble() {
@@ -268,6 +271,7 @@ export default function AddCardsPage() {
         foil: quickForm.foil, condition: quickForm.condition || null,
         purchasePrice: purchasePrice ?? (priceAutofilled ? undefined : null),
         packOpened: quickForm.packOpened, notes: quickForm.notes || undefined,
+        proxy: quickForm.proxy, misprint: quickForm.misprint, altered: quickForm.altered,
         destinationId: destOverride ?? (quickDest ? Number(quickDest) : undefined),
       });
       const locName = locations.find(l => l.id === Number(loc))?.name || 'collection';
@@ -1146,6 +1150,11 @@ export default function AddCardsPage() {
                 {invalidField === 'price' && <InvalidBubble />}
               </Box>
               <Switch label="Pack opened" checked={quickForm.packOpened} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, packOpened: v })); }} size="sm" mt={24} />
+            </Group>
+            <Group gap="sm" mb="sm">
+              <Switch label="Proxy" checked={quickForm.proxy} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, proxy: v })); }} size="sm" />
+              <Switch label="Misprint" checked={quickForm.misprint} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, misprint: v })); }} size="sm" />
+              <Switch label="Altered" checked={quickForm.altered} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, altered: v })); }} size="sm" />
             </Group>
             <Box style={{ position: 'relative' }}>
               <Select label="Location" placeholder="Select location" searchable selectFirstOptionOnChange

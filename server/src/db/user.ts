@@ -4,6 +4,7 @@ import * as schema from './schema';
 import fs from 'fs';
 import { usersDir, userDbPath } from './paths';
 import { initUserSchema } from './initUser';
+import { auditUserSchema, stampUserVersion } from './schemaAudit';
 
 fs.mkdirSync(usersDir, { recursive: true });
 
@@ -24,6 +25,20 @@ export function getUserSqlite(userId: number): DatabaseType {
     }
     connections.set(userId, c);
     initUserSchema(c);
+    stampUserVersion(c);
+    try {
+      const audit = auditUserSchema(c);
+      const extra = audit.tables.flatMap(t => t.extra.map(col => `${t.table}.${col}`));
+      const missing = audit.tables.flatMap(t => t.missing.map(col => `${t.table}.${col}`));
+      if (missing.length) {
+        console.warn(`[db] user ${userId}: schema missing columns (auto-migrated): ${missing.join(', ')}`);
+      }
+      if (extra.length || audit.unknownTables.length) {
+        console.warn(`[db] user ${userId}: schema has columns/tables not in this build: ${extra.join(', ')}${audit.unknownTables.length ? ` unknown tables: ${audit.unknownTables.join(', ')}` : ''}`);
+      }
+    } catch {
+      /* audit is best-effort */
+    }
     if (connections.size > MAX_CONNECTIONS) {
       const oldest = connections.keys().next().value;
       if (oldest !== undefined && oldest !== userId) {

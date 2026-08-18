@@ -115,7 +115,7 @@ wantlistRouter.get('/', (req, res) => {
       case 'foil': cmp = (a.foil || 0) - (b.foil || 0); break;
       case 'cond': cmp = (a.condition || '').localeCompare(b.condition || ''); break;
       case 'price': cmp = priceOf(a) - priceOf(b); break;
-      case 'qty': cmp = a.cardName.localeCompare(b.cardName); break;
+      case 'qty': cmp = (a.quantity || 0) - (b.quantity || 0); break;
       default: cmp = (a.createdAt || '').localeCompare(b.createdAt || ''); break;
     }
     return cmp * order;

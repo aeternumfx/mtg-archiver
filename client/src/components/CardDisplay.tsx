@@ -124,6 +124,49 @@ function ghostImageFrom(card: any): { small: string | null; large: string | null
   return null;
 }
 
+export function resolveGhostImages(
+  name?: string | null,
+  cardId?: string | null,
+): Promise<{ small: string | null; large: string | null } | null> {
+  const key = cardId ? `id:${cardId}` : (name ? `name:${name.toLowerCase()}` : null);
+  if (!key) return Promise.resolve(null);
+  const cached = ghostCache.get(key);
+  if (cached !== undefined) return Promise.resolve(cached);
+  const loader = cardId
+    ? api.cards.get(cardId).then(c => ghostImageFrom(c)).catch(() => null)
+    : api.cards.grouped(name || '', 1).then(r => ghostImageFrom(r.data?.[0])).catch(() => null);
+  return loader.then(img => {
+    ghostCache.set(key, img);
+    return img;
+  });
+}
+
+// Low-priority, concurrency-limited prefetch so hover previews render instantly.
+const MAX_PREFETCH = 3;
+let prefetchActive = 0;
+const prefetchQueue: string[] = [];
+const prefetchedUrls = new Set<string>();
+
+function pumpPrefetch() {
+  while (prefetchActive < MAX_PREFETCH && prefetchQueue.length > 0) {
+    const url = prefetchQueue.shift()!;
+    prefetchActive++;
+    const img = new window.Image();
+    img.decoding = 'async';
+    const done = () => { prefetchActive--; pumpPrefetch(); };
+    img.onload = done;
+    img.onerror = done;
+    img.src = url;
+  }
+}
+
+export function prefetchCardImage(url?: string | null) {
+  if (!url || prefetchedUrls.has(url)) return;
+  prefetchedUrls.add(url);
+  prefetchQueue.push(url);
+  pumpPrefetch();
+}
+
 export function GhostThumb({ name, cardId, card }: {
   name?: string | null;
   cardId?: string | null;
@@ -138,20 +181,10 @@ export function GhostThumb({ name, cardId, card }: {
     if (direct) { setImage(direct); setResolved(true); return; }
 
     setImage(null); setResolved(false);
-    const key = cardId ? `id:${cardId}` : (name ? `name:${name.toLowerCase()}` : null);
-    if (!key) return;
-    const cached = ghostCache.get(key);
-    if (cached !== undefined) {
-      setImage(cached); setResolved(true);
-      return;
-    }
-    const loader = cardId
-      ? api.cards.get(cardId).then(c => ghostImageFrom(c)).catch(() => null)
-      : api.cards.grouped(name || '', 1).then(r => ghostImageFrom(r.data?.[0])).catch(() => null);
-    loader.then(img => {
+    resolveGhostImages(name, cardId).then(img => {
       if (cancelled) return;
-      ghostCache.set(key, img);
-      setImage(img); setResolved(true);
+      setImage(img);
+      setResolved(true);
     });
     return () => { cancelled = true; };
   }, [name, cardId, card]);
@@ -225,6 +258,19 @@ export function Tags({ card }: { card: Record<string, any> }) {
       {card.fullArt ? <Badge size="xs" color="cyan" variant="light">FULL ART</Badge> : null}
       {card.textless ? <Badge size="xs" color="gray" variant="light">TEXTLESS</Badge> : null}
       {card.layout === 'art_series' ? <Badge size="xs" color="pink" variant="light">ART CARD</Badge> : null}
+      {card.proxy ? <Badge size="xs" color="orange" variant="light">PROXY</Badge> : null}
+      {card.misprint ? <Badge size="xs" color="red" variant="light">MISPRINT</Badge> : null}
+      {card.altered ? <Badge size="xs" color="grape" variant="light">ALTERED</Badge> : null}
+    </Group>
+  );
+}
+
+export function CopyTags({ item }: { item: { proxy?: number | boolean | null; misprint?: number | boolean | null; altered?: number | boolean | null } }) {
+  return (
+    <Group gap={4}>
+      {item.proxy ? <Badge size="xs" color="orange" variant="light">PROXY</Badge> : null}
+      {item.misprint ? <Badge size="xs" color="red" variant="light">MISPRINT</Badge> : null}
+      {item.altered ? <Badge size="xs" color="grape" variant="light">ALTERED</Badge> : null}
     </Group>
   );
 }

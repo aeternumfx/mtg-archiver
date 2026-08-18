@@ -1,4 +1,4 @@
-import { useState, useEffect, Component, type ReactNode, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, Component, type ReactNode, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput,
@@ -6,12 +6,15 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt, IconUpload, IconExternalLink } from '@tabler/icons-react';
 import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
-import { CardThumb, SetSymbol, GhostThumb } from '../components/CardDisplay';
+import { CardThumb, SetSymbol, GhostThumb, CopyTags } from '../components/CardDisplay';
 import { DeckFormModal, DECK_TYPES, CommanderThumb, DeckArtwork, type DeckFormValues } from '../components/DeckFormModal';
+import { DeckImportModal, type DeckImportResult } from '../components/DeckImportModal';
+import { FillGhostModal } from '../components/FillGhostModal';
+import { CardPrefetch } from '../components/CardPrefetch';
 import { CardGroup } from '../components/CardGroup';
 import { useUndo } from '../components/UndoToasts';
 
@@ -106,6 +109,7 @@ export default function DecksPage() {
   const [cardsLoading, setCardsLoading] = useState(false);
   const [createOpened, { open: openCreate, close: closeCreate }] = useDisclosure(false);
   const [editOpened, { open: openEdit, close: closeEdit }] = useDisclosure(false);
+  const [importOpened, { open: openImport, close: closeImport }] = useDisclosure(false);
   const [artworkOpened, { open: openArtwork, close: closeArtwork }] = useDisclosure(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingDeck, setEditingDeck] = useState<Deck | null>(null);
@@ -136,7 +140,7 @@ export default function DecksPage() {
   const [deckGroupExpanded, setDeckGroupExpanded] = useState<Set<string>>(new Set());
   const { push: pushUndo } = useUndo();
   const [editItem, setEditItem] = useState<CollectionItem | null>(null);
-  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', notes: '' });
+  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', proxy: false, misprint: false, altered: false, notes: '' });
   const [editCardOpened, { open: openEditCard, close: closeEditCard }] = useDisclosure(false);
   const [moveItems, setMoveItems] = useState<CollectionItem[]>([]);
   const [moveDestLoc, setMoveDestLoc] = useState<string | null>(null);
@@ -146,6 +150,8 @@ export default function DecksPage() {
   const [ghostMoveDestType, setGhostMoveDestType] = useState<'location' | 'deck'>('location');
   const [ghostMoveDestId, setGhostMoveDestId] = useState<string | null>(null);
   const [fillReqId, setFillReqId] = useState<number | null>(null);
+  const [fillExtReq, setFillExtReq] = useState<RequiredCard | null>(null);
+  const [fillExtOpened, { open: openFillExt, close: closeFillExt }] = useDisclosure(false);
   const [fillCardName, setFillCardName] = useState('');
   const [fillCollectionItems, setFillCollectionItems] = useState<CollectionItem[]>([]);
   const [fillOpened, { open: openFill, close: closeFill }] = useDisclosure(false);
@@ -267,12 +273,18 @@ export default function DecksPage() {
     setAddCardSearch('');
     setAddCardResults([]);
     loadDeckCards(deck.id);
+    setSearchParams({ deck: String(deck.id) }, { replace: true });
   };
 
   useEffect(() => {
     const deckId = searchParams.get('deck');
-    if (!deckId || selectedDeck) return;
-    const d = decks.find(x => String(x.id) === deckId);
+    if (deckId) sessionStorage.setItem('mtg-deck-open', deckId);
+    if (selectedDeck) return;
+    const d = (deckId && decks.find(x => String(x.id) === deckId)) as Deck | undefined
+      ?? (() => {
+        const saved = sessionStorage.getItem('mtg-deck-open');
+        return saved ? decks.find(x => String(x.id) === saved) as Deck | undefined : undefined;
+      })();
     if (d) openDeck(d);
   }, [decks, searchParams, selectedDeck]);
 
@@ -280,6 +292,7 @@ export default function DecksPage() {
     setSelectedDeck(null);
     setDeckCards([]);
     setRequiredCards([]);
+    sessionStorage.removeItem('mtg-deck-open');
     setSearchParams({}, { replace: true });
   };
 
@@ -466,6 +479,46 @@ export default function DecksPage() {
     }
   };
 
+  const handleFillExternal = (req: RequiredCard) => {
+    setFillExtReq(req);
+    openFillExt();
+  };
+
+  const closeFillExternal = () => {
+    closeFillExt();
+    setFillExtReq(null);
+  };
+
+  const handleFilledExternal = async (result: { item: { id: number } }) => {
+    const req = fillExtReq;
+    const deck = selectedDeck;
+    closeFillExternal();
+    if (!req || !deck) return;
+    pushUndo(`${req.cardName} filled externally`, async () => {
+      await api.collection.remove(result.item.id).catch(() => {});
+      const created = await api.decks.addRequired(deck.id, {
+        cardId: req.cardId ?? undefined,
+        cardName: req.cardName,
+        setCode: req.setCode ?? undefined,
+        collectorNumber: req.collectorNumber ?? undefined,
+        quantity: req.quantity,
+      }).catch(() => null);
+      await api.wantlist.add({
+        cardId: req.cardId ?? undefined,
+        cardName: req.cardName,
+        setCode: req.setCode ?? undefined,
+        collectorNumber: req.collectorNumber ?? undefined,
+        quantity: req.quantity,
+        notes: `Wanted for deck: ${deck.name}`,
+        destinationId: deck.locationId,
+        deckRequiredId: created?.id ?? null,
+      }).catch(() => {});
+      loadDeckCards(deck.id);
+    }, 'Undo fill');
+    notifications.show({ title: 'Filled', message: `${req.cardName} added to deck`, color: 'green' });
+    loadDeckCards(deck.id);
+  };
+
   const openFillDialog = async (req: RequiredCard) => {
     setFillReqId(req.id);
     setFillCardName(req.cardName);
@@ -516,6 +569,28 @@ export default function DecksPage() {
       loadDecks();
       setSelectedDeck({ ...created, cardCount: 0 });
       loadDeckCards(created.id);
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    }
+  };
+
+  const handleImported = async (result: DeckImportResult) => {
+    closeImport();
+    try {
+      const deck = { ...result.deck, cardCount: 0 };
+      notifications.show({
+        title: 'Deck imported',
+        message: `${result.uniqueCards} unique cards (${result.importedCards} total) added as ghost cards${result.commanders.length ? ` · ${result.commanders.length} command zone card(s) detected` : ''}`,
+        color: 'green',
+      });
+      loadDecks();
+      setSelectedDeck(deck);
+      loadDeckCards(deck.id);
+      pushUndo(`Imported deck "${deck.name}"`, async () => {
+        await api.decks.delete(deck.id).catch(() => {});
+        closeDeck();
+        loadDecks();
+      }, 'Undo import');
     } catch (err: any) {
       notifications.show({ title: 'Error', message: err.message, color: 'red' });
     }
@@ -628,6 +703,7 @@ export default function DecksPage() {
       quantity: item.quantity, foil: !!item.foil,
       condition: (item.condition || '') as Condition | '',
       purchasePrice: item.purchasePrice ? String(item.purchasePrice) : '',
+      proxy: !!item.proxy, misprint: !!item.misprint, altered: !!item.altered,
       notes: item.notes || '',
     });
     openEditCard();
@@ -638,7 +714,9 @@ export default function DecksPage() {
     try {
       await api.collection.update(editItem.id, {
         quantity: editForm.quantity, foil: editForm.foil ? 1 : 0, condition: editForm.condition || null,
-        purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null, notes: editForm.notes || null,
+        purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null,
+        proxy: editForm.proxy ? 1 : 0, misprint: editForm.misprint ? 1 : 0, altered: editForm.altered ? 1 : 0,
+        notes: editForm.notes || null,
       } as any);
       notifications.show({ title: 'Updated', message: 'Item updated', color: 'green' });
       closeEditCard();
@@ -786,10 +864,17 @@ export default function DecksPage() {
     + (zoneNames.commander && isGameChanger(zoneNames.commander) ? 1 : 0)
     + (zoneNames.second && isGameChanger(zoneNames.second) ? 1 : 0);
 
+  const prefetchCards = useMemo(() => deckCards.map(i => i.card).filter(Boolean), [deckCards]);
+  const prefetchGhosts = useMemo(
+    () => requiredCards.map(r => ({ cardId: r.cardId, cardName: r.cardName })),
+    [requiredCards],
+  );
+
   return (
     <ErrorBoundary>
       {selectedDeck ? (
         <>
+          <CardPrefetch cards={prefetchCards} ghosts={prefetchGhosts} />
           <Group mb="md">
             <ActionIcon variant="subtle" onClick={closeDeck}><IconArrowLeft size={20} /></ActionIcon>
             <div style={{ flex: 1 }}>
@@ -1119,13 +1204,14 @@ export default function DecksPage() {
                     <Group key={row.key} p="sm" gap="sm" wrap="nowrap" bg={rowBg} style={{ boxShadow: rowShadow }}>
                       <CardThumb card={row.item.card} foil={!!row.item.foil} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <Group gap={4} wrap="nowrap">
+                    <Group gap={4} wrap="nowrap">
                           <Text size="sm" fw={500}>{row.item.card.name}</Text>
                           {gc && (
                             <Tooltip label="Game Changer">
                               <IconFlame size={14} color="var(--mantine-color-orange-6)" style={{ flexShrink: 0 }} />
                             </Tooltip>
                           )}
+                          <CopyTags item={row.item} />
                         </Group>
                         <Group gap={4}>
                           <SetSymbol code={row.item.card.setCode} name={row.item.card.setName} size={12} />
@@ -1208,9 +1294,15 @@ export default function DecksPage() {
                       {pendingFill ? (
                         <Badge size="sm" variant="light" color="violet">Move scheduled{req.fillSourceName ? ` from ${req.fillSourceName}` : ''}</Badge>
                       ) : (
-                        <Button size="compact-xs" variant="light" color="blue" onClick={() => openFillDialog(req)}>
-                          Fill from Collection
-                        </Button>
+                        <Group gap={4} wrap="nowrap">
+                          <Button size="compact-xs" variant="light" color="green" leftSection={<IconExternalLink size={12} />}
+                            onClick={() => handleFillExternal(req)}>
+                            Fill externally
+                          </Button>
+                          <Button size="compact-xs" variant="light" color="blue" onClick={() => openFillDialog(req)}>
+                            Fill from Collection
+                          </Button>
+                        </Group>
                       )}
                       <ActionIcon variant="subtle" size="sm" onClick={() => openGhostMove(req)}><IconArrowRight size={14} /></ActionIcon>
                       <ActionIcon variant="subtle" color="red" size="sm" onClick={() => handleRemoveRequired(req.id)}><IconTrash size={14} /></ActionIcon>
@@ -1233,7 +1325,10 @@ export default function DecksPage() {
         <>
           <Group mb="md" justify="space-between">
             <Title order={2}>Decks</Title>
-            <Button leftSection={<IconPlus size={16} />} onClick={openCreateDialog}>New Deck</Button>
+            <Group gap="sm">
+              <Button variant="default" leftSection={<IconUpload size={16} />} onClick={openImport}>Import Deck</Button>
+              <Button leftSection={<IconPlus size={16} />} onClick={openCreateDialog}>New Deck</Button>
+            </Group>
           </Group>
           <Box pos="relative">
             <LoadingOverlay visible={loading} />
@@ -1263,6 +1358,21 @@ export default function DecksPage() {
 
       <DeckFormModal opened={createOpened} onClose={closeCreate} title="New Deck" saveLabel="Create"
         onSave={handleCreate} />
+
+      <DeckImportModal opened={importOpened} onClose={closeImport} onImported={handleImported} />
+
+      <FillGhostModal opened={fillExtOpened} onClose={closeFillExternal}
+        deck={selectedDeck ? { id: selectedDeck.id, name: selectedDeck.name, locationId: selectedDeck.locationId } : null}
+        locations={locations}
+        req={fillExtReq ? {
+          id: fillExtReq.id,
+          cardId: fillExtReq.cardId,
+          cardName: fillExtReq.cardName,
+          setCode: fillExtReq.setCode,
+          collectorNumber: fillExtReq.collectorNumber,
+          quantity: fillExtReq.quantity,
+        } : null}
+        onFilled={handleFilledExternal} />
 
       <DeckFormModal opened={editOpened} onClose={closeEdit} title="Edit Deck" saveLabel="Save"
         initial={editingDeck ? {
@@ -1302,6 +1412,11 @@ export default function DecksPage() {
                 styles={{ root: { gap: 2 }, label: { fontWeight: 600, fontSize: 11, padding: '2px 6px' }, indicator: { backgroundColor: CONDITION_COLORS[editForm.condition] || '#00897b' } }} />
             </Box>
             <TextInput label="Purchase Price ($)" value={editForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, purchasePrice: v })); }} mb="sm" />
+            <Group gap="sm" mb="sm">
+              <Switch label="Proxy" checked={editForm.proxy} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, proxy: v })); }} />
+              <Switch label="Misprint" checked={editForm.misprint} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, misprint: v })); }} />
+              <Switch label="Altered" checked={editForm.altered} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, altered: v })); }} />
+            </Group>
             <TextInput label="Notes" value={editForm.notes} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, notes: v })); }} mb="md" />
             <Group justify="flex-end"><Button variant="default" onClick={closeEditCard}>Cancel</Button><Button onClick={handleSaveEditCard}>Save</Button></Group>
           </Box>
