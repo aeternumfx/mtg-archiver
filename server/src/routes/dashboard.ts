@@ -35,6 +35,7 @@ dashboardRouter.get('/stats', (_req, res) => {
       COALESCE(SUM(ci.quantity * ci.purchase_price), 0) as value
     FROM locations l
     LEFT JOIN collection_items ci ON ci.location_id = l.id
+    WHERE l.deck_id IS NULL
     GROUP BY l.id
     ORDER BY l.name
   `).all() as Array<{ id: number; name: string; count: number; value: number }>;

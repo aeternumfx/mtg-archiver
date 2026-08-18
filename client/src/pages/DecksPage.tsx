@@ -489,33 +489,49 @@ export default function DecksPage() {
     setFillExtReq(null);
   };
 
-  const handleFilledExternal = async (result: { item: { id: number } }) => {
+  const handleFilledExternal = async (result: { item: { id: number; quantity: number }; remainingGhost: { id: number; quantity: number } | null }) => {
     const req = fillExtReq;
     const deck = selectedDeck;
+    const filledQty = result.item.quantity || 1;
     closeFillExternal();
     if (!req || !deck) return;
-    pushUndo(`${req.cardName} filled externally`, async () => {
-      await api.collection.remove(result.item.id).catch(() => {});
-      const created = await api.decks.addRequired(deck.id, {
-        cardId: req.cardId ?? undefined,
-        cardName: req.cardName,
-        setCode: req.setCode ?? undefined,
-        collectorNumber: req.collectorNumber ?? undefined,
-        quantity: req.quantity,
-      }).catch(() => null);
-      await api.wantlist.add({
-        cardId: req.cardId ?? undefined,
-        cardName: req.cardName,
-        setCode: req.setCode ?? undefined,
-        collectorNumber: req.collectorNumber ?? undefined,
-        quantity: req.quantity,
-        notes: `Wanted for deck: ${deck.name}`,
-        destinationId: deck.locationId,
-        deckRequiredId: created?.id ?? null,
-      }).catch(() => {});
-      loadDeckCards(deck.id);
-    }, 'Undo fill');
-    notifications.show({ title: 'Filled', message: `${req.cardName} added to deck`, color: 'green' });
+    if (result.remainingGhost) {
+      pushUndo(`${req.cardName} filled externally (${filledQty}/${req.quantity})`, async () => {
+        // Remove the added copy and restore the ghost's original required quantity.
+        await api.collection.remove(result.item.id).catch(() => {});
+        await api.decks.updateRequired(deck.id, result.remainingGhost!.id, { quantity: req.quantity }).catch(() => {});
+        loadDeckCards(deck.id);
+      }, 'Undo fill');
+    } else {
+      pushUndo(`${req.cardName} filled externally`, async () => {
+        await api.collection.remove(result.item.id).catch(() => {});
+        const created = await api.decks.addRequired(deck.id, {
+          cardId: req.cardId ?? undefined,
+          cardName: req.cardName,
+          setCode: req.setCode ?? undefined,
+          collectorNumber: req.collectorNumber ?? undefined,
+          quantity: req.quantity,
+        }).catch(() => null);
+        await api.wantlist.add({
+          cardId: req.cardId ?? undefined,
+          cardName: req.cardName,
+          setCode: req.setCode ?? undefined,
+          collectorNumber: req.collectorNumber ?? undefined,
+          quantity: req.quantity,
+          notes: `Wanted for deck: ${deck.name}`,
+          destinationId: deck.locationId,
+          deckRequiredId: created?.id ?? null,
+        }).catch(() => {});
+        loadDeckCards(deck.id);
+      }, 'Undo fill');
+    }
+    notifications.show({
+      title: 'Filled',
+      message: result.remainingGhost
+        ? `${req.cardName} added to deck. ${result.remainingGhost.quantity} still required.`
+        : `${req.cardName} added to deck`,
+      color: 'green',
+    });
     loadDeckCards(deck.id);
   };
 
@@ -1287,6 +1303,11 @@ export default function DecksPage() {
                       <div style={{ flex: 1 }}>
                         <Group gap={4} wrap="nowrap">
                           <Text size="sm" fw={500}>{req.cardName}</Text>
+                          {req.setCode ? (
+                            <Badge size="xs" variant="light" color="blue">Specific printing</Badge>
+                          ) : (
+                            <Badge size="xs" variant="light" color="gray">Any printing</Badge>
+                          )}
                           {isGameChanger(req.cardName) && (
                             <Tooltip label="Game Changer">
                               <IconFlame size={14} color="var(--mantine-color-orange-6)" style={{ flexShrink: 0 }} />

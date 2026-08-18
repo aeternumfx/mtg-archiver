@@ -50,6 +50,142 @@ export function cardsByName(name: string): CatalogCardRow[] {
   ).all(name) as CatalogCardRow[];
 }
 
+const NON_PLAYABLE_LAYOUTS = [
+  'art_series', 'token', 'double_faced_token', 'emblem', 'scheme',
+  'planar', 'vanguard', 'augment', 'host',
+];
+
+function usdPrice(c: CatalogCardRow): number | null {
+  if (!c.prices) return null;
+  let prices: Record<string, any> = {};
+  try { prices = JSON.parse(c.prices); } catch { return null; }
+  const v = Number(prices.usd);
+  return Number.isFinite(v) && v > 0 ? v : null;
+}
+
+// In-memory cache for the cheapest-printing lookups. Prices change on the daily
+// Scryfall sync, so a short TTL keeps repeats instant while still reflecting
+// current prices within the sync window.
+const CHEAPEST_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const cheapestCache = new Map<string, { card: CatalogCardRow; price: number | null; ts: number }>();
+
+function cheapestCacheGet(key: string): { card: CatalogCardRow; price: number | null } | undefined {
+  const e = cheapestCache.get(key);
+  if (!e) return undefined;
+  if (Date.now() - e.ts > CHEAPEST_TTL_MS) {
+    cheapestCache.delete(key);
+    return undefined;
+  }
+  return { card: e.card, price: e.price };
+}
+
+export function clearCheapestCache() {
+  cheapestCache.clear();
+}
+
+/**
+ * Returns the cheapest available (non-foil USD) printing for each card name in
+ * one query, excluding non-playable layouts and Arena-only printings. Used to
+ * show the lowest price / representative art for generic wantlist entries.
+ * Results are cached briefly so repeated wantlist loads are fast.
+ */
+export function cheapestByNames(names: string[]): Map<string, { card: CatalogCardRow; price: number | null }> {
+  const result = new Map<string, { card: CatalogCardRow; price: number | null }>();
+  const uniq = Array.from(new Set(
+    names.map(n => n.trim().toLowerCase().replace(/([%_])/g, '\\$1')).filter(Boolean),
+  ));
+  if (uniq.length === 0) return result;
+
+  // Serve cached results; collect the names we still need to compute.
+  const missing: string[] = [];
+  for (const low of uniq) {
+    const hit = cheapestCacheGet(low);
+    if (hit !== undefined) {
+      result.set(low, hit);
+    } else {
+      missing.push(low);
+    }
+  }
+  if (missing.length === 0) return result;
+
+  const layoutPh = NON_PLAYABLE_LAYOUTS.map(() => '?').join(',');
+  const conds: string[] = [];
+  const params: unknown[] = [];
+  for (const low of missing) {
+    conds.push(`(lower(name) = ? OR lower(name) LIKE ? ESCAPE '\\')`);
+    params.push(low, `${low} // %`);
+  }
+  const rows = catalogSqlite.prepare(
+    `SELECT ${CATALOG_SELECT} FROM scryfall_cards
+     WHERE (${conds.join(' OR ')})
+       AND layout NOT IN (${layoutPh})
+       AND set_code NOT LIKE 'y%' AND set_code != 'hbg' AND collector_number NOT LIKE 'A-%'
+     ORDER BY released_at DESC`
+  ).all(...params, ...NON_PLAYABLE_LAYOUTS) as CatalogCardRow[];
+
+  // O(1) lookup of which requested name a card belongs to.
+  const missingSet = new Set(missing);
+  const byName = new Map<string, string>();
+  for (const low of missing) byName.set(low, low);
+
+  // Pick, per name, the cheapest printing that actually has sale data. Cards
+  // with no price (usdPrice === null, e.g. $0.00 / no vendor) are ignored unless
+  // no printing for that card has any price at all — in which case we fall back
+  // to the most-recent printing rather than showing a $0.00 as "cheapest".
+  const fallback = new Map<string, CatalogCardRow>();
+  const priced = new Map<string, { card: CatalogCardRow; price: number }>();
+  const hitNames = new Set<string>();
+
+  for (const r of rows) {
+    const ln = r.name.toLowerCase();
+    // Fast membership + which name it resolves to.
+    const hit = findHit(ln, missingSet, missing);
+    if (hit === undefined) continue;
+    hitNames.add(hit);
+    if (!fallback.has(hit)) fallback.set(hit, r); // most-recent printing
+
+    const p = usdPrice(r);
+    if (p !== null) {
+      const ex = priced.get(hit);
+      if (!ex || p < ex.price) priced.set(hit, { card: r, price: p });
+    }
+  }
+
+  for (const hit of hitNames) {
+    let entry: { card: CatalogCardRow; price: number | null };
+    if (priced.has(hit)) {
+      entry = priced.get(hit)!;
+    } else {
+      const card = fallback.get(hit)!;
+      entry = { card, price: usdPrice(card) };
+    }
+    result.set(hit, entry);
+    cheapestCache.set(hit, { card: entry.card, price: entry.price, ts: Date.now() });
+  }
+  return result;
+}
+
+// Matches a card's lowercased name against the requested names, handling
+// double-faced names ("A // B") that were requested by their short face name.
+function findHit(lowerName: string, set: Set<string>, list: string[]): string | undefined {
+  if (set.has(lowerName)) return lowerName;
+  const idx = lowerName.indexOf(' // ');
+  if (idx > 0) {
+    const face = lowerName.slice(0, idx);
+    if (set.has(face)) return face;
+  }
+  // Fallback linear scan for exact/prefix edge cases.
+  for (const low of list) {
+    if (lowerName === low || lowerName.startsWith(low + ' // ')) return low;
+  }
+  return undefined;
+}
+
+export function cheapestByName(name: string): { card: CatalogCardRow; price: number | null } | null {
+  return cheapestByNames([name]).get(name.trim().toLowerCase()) ?? null;
+}
+
+
 export function localImageUris(cardId: string, imageUris: string | Record<string, string> | null | undefined, faceIdx?: number): Record<string, string> | null {
   if (!imageUris) return null;
   let uris: Record<string, string>;

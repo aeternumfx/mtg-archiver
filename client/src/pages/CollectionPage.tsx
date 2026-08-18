@@ -68,7 +68,7 @@ const ItemRow = memo(function ItemRow({ row, selected, locations, onToggle, onEd
   const { item } = row;
   return (
     <>
-      <Checkbox size="xs" checked={selected} onClick={(e) => onToggle(row.key, e.shiftKey)} />
+      <Checkbox size="xs" checked={selected} readOnly onClick={(e) => onToggle(row.key, e.shiftKey)} />
       <CardThumb card={item.card} foil={!!item.foil} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <Group gap={4} wrap="nowrap">

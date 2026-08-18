@@ -1,5 +1,26 @@
 import type { PaginatedResponse, GroupedCard, ScryfallCard, CardResult, Location, LocationGroup, CollectionItem, SyncStatus, ImportDiffReport, ImportOptions, DbSchemaHealth } from '../types';
 
+export interface WantlistItemType {
+  id: number;
+  cardId: string | null;
+  cardName: string;
+  setCode: string | null;
+  collectorNumber: string | null;
+  foil: number;
+  condition: string | null;
+  quantity: number;
+  notes: string | null;
+  destinationId: number | null;
+  collectionGoalId: number | null;
+  deckRequiredId: number | null;
+  tradeId: number | null;
+  persistent: number;
+  createdAt: string;
+  price: number | null;
+  cheapestCard: ScryfallCard | null;
+  cheapestPrice: number | null;
+}
+
 let onUnauthorized: (() => void) | null = null;
 
 export function setOnUnauthorized(fn: (() => void) | null) {
@@ -193,6 +214,9 @@ export const api = {
           notes: string | null;
           destinationName: string | null;
           card: any;
+          price: number | null;
+          cheapestCard: any;
+          cheapestPrice: number | null;
         }>;
       }>(`/api/share/${token}/wantlist${access ? `?access=${encodeURIComponent(access)}` : ''}`),
   },
@@ -335,6 +359,10 @@ export const api = {
     printings: (name: string) => request<ScryfallCard[]>(`/api/cards/printings?name=${encodeURIComponent(name)}`),
     printingsPaged: (name: string, page = 1, pageSize = 50, opts?: { counts?: boolean }) =>
       request<PaginatedResponse<ScryfallCard>>(`/api/cards/printings?name=${encodeURIComponent(name)}&page=${page}&pageSize=${pageSize}${opts?.counts ? '&counts=1' : ''}`),
+    byName: (name: string) =>
+      request<ScryfallCard | null>(`/api/cards/by-name?name=${encodeURIComponent(name)}`),
+    byNames: (names: string[]) =>
+      request<Record<string, ScryfallCard>>(`/api/cards/by-names?names=${encodeURIComponent(names.join(','))}`),
   },
 
   locations: {
@@ -386,7 +414,7 @@ export const api = {
   },
 
   wantlist: {
-    list: () => request<Array<{ id: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; foil: number; condition: string | null; quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; persistent: number; createdAt: string }>>('/api/wantlist'),
+    list: () => request<WantlistItemType[]>('/api/wantlist'),
     paged: (page: number, pageSize = 50, params?: { destinationId?: number; q?: string; sort?: string; order?: string; filters?: Record<string, string>; tradeGhosts?: string }) => {
       const p = new URLSearchParams();
       p.set('page', String(page));
@@ -397,7 +425,7 @@ export const api = {
       if (params?.order) p.set('order', params.order);
       if (params?.tradeGhosts) p.set('tradeGhosts', params.tradeGhosts);
       if (params?.filters) for (const [k, v] of Object.entries(params.filters)) if (v) p.set(k, v);
-      return request<{ data: Array<{ id: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; foil: number; condition: string | null; quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; tradeId: number | null; persistent: number; createdAt: string }>; total: number; page: number; pageSize: number; totalPages: number }>(`/api/wantlist?${p}`);
+      return request<{ data: WantlistItemType[]; total: number; page: number; pageSize: number; totalPages: number }>(`/api/wantlist?${p}`);
     },
     add: (data: { cardId?: string; cardName: string; setCode?: string; collectorNumber?: string; foil?: boolean; condition?: string | null; quantity?: number; notes?: string; destinationId?: number | null; collectionGoalId?: number | null; persistent?: boolean; deckRequiredId?: number | null }) =>
       request<any>('/api/wantlist', { method: 'POST', body: JSON.stringify(data) }),
@@ -478,7 +506,7 @@ export const api = {
       request<any>(`/api/decks/${id}/required`, { method: 'POST', body: JSON.stringify(data) }),
     removeRequired: (id: number, reqId: number) =>
       request<void>(`/api/decks/${id}/required/${reqId}`, { method: 'DELETE' }),
-    updateRequired: (id: number, reqId: number, data: { cardId?: string | null }) =>
+    updateRequired: (id: number, reqId: number, data: { cardId?: string | null; quantity?: number }) =>
       request<any>(`/api/decks/${id}/required/${reqId}`, { method: 'PATCH', body: JSON.stringify(data) }),
     fillRequired: (id: number, reqId: number, itemId: number, schedule?: boolean) =>
       request<any>(`/api/decks/${id}/required/${reqId}/fill`, { method: 'POST', body: JSON.stringify({ itemId, schedule: !!schedule }) }),
@@ -493,7 +521,7 @@ export const api = {
       notes?: string;
       destinationId?: number | null;
     }) =>
-      request<{ item: { id: number }; removedGhost: any }>(`/api/decks/${id}/required/${reqId}/fill-external`, { method: 'POST', body: JSON.stringify(data) }),
+      request<{ item: { id: number; quantity: number }; remainingGhost: { id: number; deckId: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } | null }>(`/api/decks/${id}/required/${reqId}/fill-external`, { method: 'POST', body: JSON.stringify(data) }),
     moveRequired: (id: number, reqId: number, data: { destinationType: 'location' | 'deck'; destinationId: number }) =>
       request<any>(`/api/decks/${id}/required/${reqId}/move`, { method: 'POST', body: JSON.stringify(data) }),
     importDeck: (data: { name: string; description?: string; deckType?: string; content: string; format?: 'auto' | 'csv' | 'text' }) =>

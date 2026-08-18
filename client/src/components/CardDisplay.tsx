@@ -134,15 +134,28 @@ export function resolveGhostImages(
   if (cached !== undefined) return Promise.resolve(cached);
   const loader = cardId
     ? api.cards.get(cardId).then(c => ghostImageFrom(c)).catch(() => null)
-    : api.cards.grouped(name || '', 1).then(r => ghostImageFrom(r.data?.[0])).catch(() => null);
+    : api.cards.byName(name || '').then(c => ghostImageFrom(c)).catch(() => null);
   return loader.then(img => {
     ghostCache.set(key, img);
     return img;
   });
 }
 
+// Populates the ghost image cache from a name -> card map in one go, so
+// individual GhostThumb components render without per-name network round-trips.
+export function cacheGhostImagesByName(cards: Record<string, any>): string[] {
+  const urls: string[] = [];
+  for (const [name, card] of Object.entries(cards)) {
+    const img = ghostImageFrom(card);
+    ghostCache.set(`name:${name.toLowerCase()}`, img);
+    if (img?.small) urls.push(img.small);
+    if (img?.large) urls.push(img.large);
+  }
+  return urls;
+}
+
 // Low-priority, concurrency-limited prefetch so hover previews render instantly.
-const MAX_PREFETCH = 3;
+const MAX_PREFETCH = 10;
 let prefetchActive = 0;
 const prefetchQueue: string[] = [];
 const prefetchedUrls = new Set<string>();

@@ -1,16 +1,38 @@
 import { Router } from 'express';
 import { catalogDb, schema, sqlite } from '../db';
-import { like, or, and, sql, eq, asc, desc } from 'drizzle-orm';
+import { like, or, and, sql, eq, asc, desc, notInArray } from 'drizzle-orm';
 import { localImageUris, localizeCardFaces } from '../services/cards';
 
 export const cardsRouter = Router();
+
+function isKnownSet(code: string): boolean {
+  return !!catalogDb.select({ code: schema.sets.code })
+    .from(schema.sets)
+    .where(eq(schema.sets.code, code))
+    .get();
+}
 
 function parseQuery(q: string): { type: 'setnum' | 'scryfall' | 'name'; set?: string; num?: string } {
   const scryfallMatch = q.match(/^s:(\S+)\s+cn:(\S+)$/i);
   if (scryfallMatch) return { type: 'scryfall', set: scryfallMatch[1].toLowerCase(), num: scryfallMatch[2] };
 
-  const setnumMatch = q.match(/^([a-z]{2,4})\s*(\d+)$/i);
-  if (setnumMatch) return { type: 'setnum', set: setnumMatch[1].toLowerCase(), num: setnumMatch[2] };
+  // [set][collector number], e.g. "blb0234", "sld 123", "mh2 045", "on 1".
+  // Split the leading letters from any trailing set digit and the collector so
+  // we can repartition cleanly and only accept it when the set actually exists
+  // (so searches like "the 1" remain name searches).
+  const m = q.match(/^([a-z]{2,4})([0-9]?)\s*(\d+)$/i);
+  if (m) {
+    const letters = m[1].toLowerCase();
+    const optDigit = m[2];
+    const num = m[3];
+    const withDigit = letters + optDigit;
+    if (optDigit && isKnownSet(withDigit)) {
+      return { type: 'setnum', set: withDigit, num };
+    }
+    if (isKnownSet(letters)) {
+      return { type: 'setnum', set: letters, num: optDigit + num };
+    }
+  }
 
   return { type: 'name' };
 }
@@ -34,52 +56,54 @@ function attachCollectionCounts(cards: Array<{ id: string }>) {
   }
 }
 
+const cardFields = {
+  id: schema.scryfallCards.id,
+  name: schema.scryfallCards.name,
+  setName: schema.scryfallCards.setName,
+  setCode: schema.scryfallCards.setCode,
+  collectorNumber: schema.scryfallCards.collectorNumber,
+  rarity: schema.scryfallCards.rarity,
+  manaCost: schema.scryfallCards.manaCost,
+  cmc: schema.scryfallCards.cmc,
+  typeLine: schema.scryfallCards.typeLine,
+  oracleText: schema.scryfallCards.oracleText,
+  colors: schema.scryfallCards.colors,
+  imageUris: schema.scryfallCards.imageUris,
+  prices: schema.scryfallCards.prices,
+  releasedAt: schema.scryfallCards.releasedAt,
+  layout: schema.scryfallCards.layout,
+  promo: schema.scryfallCards.promo,
+  seriealized: schema.scryfallCards.seriealized,
+  fullArt: schema.scryfallCards.fullArt,
+  textless: schema.scryfallCards.textless,
+  finishes: schema.scryfallCards.finishes,
+  frameEffects: schema.scryfallCards.frameEffects,
+  cardFaces: schema.scryfallCards.cardFaces,
+} as const;
+
+const parseCard = (c: any) => ({
+  ...c,
+  colors: c.colors ? JSON.parse(c.colors) : null,
+  imageUris: localImageUris(c.id, c.imageUris),
+  prices: c.prices ? JSON.parse(c.prices) : null,
+  finishes: c.finishes ? JSON.parse(c.finishes) : null,
+  frameEffects: c.frameEffects ? JSON.parse(c.frameEffects) : null,
+  cardFaces: localizeCardFaces(c.id, c.cardFaces),
+});
+
 cardsRouter.get('/find', (req, res) => {
   const q = (req.query.q as string ?? '').trim();
   if (!q) return res.json([]);
 
   const parsed = parseQuery(q);
 
-  const cardFields = {
-    id: schema.scryfallCards.id,
-    name: schema.scryfallCards.name,
-    setName: schema.scryfallCards.setName,
-    setCode: schema.scryfallCards.setCode,
-    collectorNumber: schema.scryfallCards.collectorNumber,
-    rarity: schema.scryfallCards.rarity,
-    manaCost: schema.scryfallCards.manaCost,
-    cmc: schema.scryfallCards.cmc,
-    typeLine: schema.scryfallCards.typeLine,
-    oracleText: schema.scryfallCards.oracleText,
-    colors: schema.scryfallCards.colors,
-    imageUris: schema.scryfallCards.imageUris,
-    prices: schema.scryfallCards.prices,
-    releasedAt: schema.scryfallCards.releasedAt,
-    layout: schema.scryfallCards.layout,
-    promo: schema.scryfallCards.promo,
-    seriealized: schema.scryfallCards.seriealized,
-    fullArt: schema.scryfallCards.fullArt,
-    textless: schema.scryfallCards.textless,
-    finishes: schema.scryfallCards.finishes,
-    frameEffects: schema.scryfallCards.frameEffects,
-    cardFaces: schema.scryfallCards.cardFaces,
-  } as const;
-
-  const parseCard = (c: any) => ({
-    ...c,
-    colors: c.colors ? JSON.parse(c.colors) : null,
-    imageUris: localImageUris(c.id, c.imageUris),
-    prices: c.prices ? JSON.parse(c.prices) : null,
-    finishes: c.finishes ? JSON.parse(c.finishes) : null,
-    frameEffects: c.frameEffects ? JSON.parse(c.frameEffects) : null,
-    cardFaces: localizeCardFaces(c.id, c.cardFaces),
-  });
-
   if (parsed.type === 'name') {
-    const tokens = q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean);
+    const APOS = `'`;
+    const nameNoApos = sql`replace(${schema.scryfallCards.name}, ${APOS}, ${''})`;
+    const tokens = q.split(/[,\s]+/).filter(Boolean);
     const cards = catalogDb.select(cardFields)
       .from(schema.scryfallCards)
-      .where(and(NOT_ARENA, ...tokens.map(t => like(schema.scryfallCards.name, `%${t}%`))))
+      .where(and(NOT_ARENA, ...tokens.map(t => sql`${nameNoApos} LIKE ${'%' + t.replace(/['"]/g, '') + '%'}`)))
       .orderBy(asc(schema.scryfallCards.name), desc(schema.scryfallCards.releasedAt))
       .limit(20)
       .all();
@@ -128,6 +152,81 @@ cardsRouter.get('/find', (req, res) => {
     prices: c.prices ? JSON.parse(c.prices) : null,
   }));
   if (req.query.counts === '1') attachCollectionCounts(result);
+  res.json(result);
+});
+
+// Resolve a card name to a single real, playable card (excludes art cards,
+// tokens, emblems, etc.) — used for ghost thumbnails so a generic ghost never
+// shows art-card art.
+const NON_CARD_LAYOUTS = [
+  'art_series', 'token', 'double_faced_token', 'emblem', 'scheme',
+  'planar', 'vanguard', 'augment', 'host',
+];
+cardsRouter.get('/by-name', (req, res) => {
+  const name = (req.query.name as string ?? '').trim();
+  if (!name) {
+    return res.json(null);
+  }
+  const lower = name.toLowerCase().replace(/([%_])/g, '\\$1');
+  const card = catalogDb.select(cardFields)
+    .from(schema.scryfallCards)
+    .where(and(
+      NOT_ARENA,
+      notInArray(schema.scryfallCards.layout, NON_CARD_LAYOUTS),
+      or(
+        sql`lower(${schema.scryfallCards.name}) = ${lower}`,
+        sql`lower(${schema.scryfallCards.name}) LIKE ${lower + ' // %'} ESCAPE '\\'`,
+      ),
+    ))
+    .orderBy(desc(schema.scryfallCards.releasedAt))
+    .limit(1)
+    .get();
+  if (!card) {
+    return res.json(null);
+  }
+  res.json(parseCard(card));
+});
+
+// Batch resolve many card names to a single real, playable card each. Avoids an
+// HTTP round-trip per generic ghost when a deck view needs art for all of them.
+cardsRouter.get('/by-names', (req, res) => {
+  const raw = (req.query.names as string ?? '').trim();
+  if (!raw) {
+    return res.json({});
+  }
+  const names = Array.from(new Set(
+    raw.split(',').map(n => n.trim()).filter(Boolean).slice(0, 200),
+  ));
+  if (names.length === 0) {
+    return res.json({});
+  }
+  const exact = names.map(n => sql`lower(${schema.scryfallCards.name}) = ${n.toLowerCase().replace(/([%_])/g, '\\$1')}`);
+  const like = names.map(n => sql`lower(${schema.scryfallCards.name}) LIKE ${n.toLowerCase().replace(/([%_])/g, '\\$1') + ' // %'} ESCAPE '\\'`);
+  const rows = catalogDb.select(cardFields)
+    .from(schema.scryfallCards)
+    .where(and(
+      NOT_ARENA,
+      notInArray(schema.scryfallCards.layout, NON_CARD_LAYOUTS),
+      or(...exact, ...like),
+    ))
+    .orderBy(desc(schema.scryfallCards.releasedAt))
+    .all();
+
+  // Keep, per input name, the most recent matching printing.
+  const byName = new Map<string, any>();
+  for (const r of rows) {
+    // Match each card to the input name it corresponds to (exact name or DFC prefix).
+    const lowerName = r.name.toLowerCase();
+    const hit = names.find(nn => lowerName === nn.toLowerCase() || lowerName.startsWith(nn.toLowerCase() + ' // '));
+    if (hit && !byName.has(hit)) {
+      byName.set(hit, r);
+    }
+  }
+  const result: Record<string, any> = {};
+  for (const n of names) {
+    const card = byName.get(n);
+    if (card) result[n] = parseCard(card);
+  }
   res.json(result);
 });
 
@@ -186,8 +285,15 @@ cardsRouter.get('/grouped', (req, res) => {
   const pageSize = 20;
   const offset = (page - 1) * pageSize;
 
-  const tokens = q ? q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean) : [];
-  const conditions: ReturnType<typeof sql>[] = [NOT_ARENA, ...tokens.map(t => like(schema.scryfallCards.name, `%${t}%`))];
+  // Match card names ignoring apostrophes/quotes, so both "magistrate's scepter"
+  // and "magistrates scepter" find "Magistrate's Scepter".
+  const APOS = `'`;
+  const nameNoApos = sql`replace(${schema.scryfallCards.name}, ${APOS}, ${''})`;
+  const tokens = q ? q.split(/[,\s]+/).filter(Boolean) : [];
+  const conditions: ReturnType<typeof sql>[] = [
+    NOT_ARENA,
+    ...tokens.map(t => sql`${nameNoApos} LIKE ${'%' + t.replace(/['"]/g, '') + '%'}`),
+  ];
 
   const colorInclude: string[] = [];
   const colorExclude: string[] = [];

@@ -6,7 +6,7 @@ import { recordCall } from './apiCalls';
 
 fs.mkdirSync(imagesDir, { recursive: true });
 
-const MAX_CONCURRENT = 6;
+const MAX_CONCURRENT = 10;
 let active = 0;
 const queue: Array<() => void> = [];
 const inflight = new Map<string, Promise<Buffer | null>>();

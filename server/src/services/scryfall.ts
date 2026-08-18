@@ -1,6 +1,7 @@
 import { catalogDb, catalogSqlite, schema } from '../db';
 import { eq, sql } from 'drizzle-orm';
 import { recordCall } from './apiCalls';
+import { clearCheapestCache } from './cards';
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
@@ -280,6 +281,7 @@ async function downloadAndSync(downloadUri: string, compressedSize: number): Pro
     progress = 100;
     await syncSets();
     stage = 'Sync complete!';
+    clearCheapestCache();
 
     console.log(`Sync complete: ${totalProcessed} cards processed`);
   } catch (err) {

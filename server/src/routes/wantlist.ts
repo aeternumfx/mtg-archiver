@@ -2,7 +2,7 @@ import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq } from 'drizzle-orm';
-import { cardsByIds } from '../services/cards';
+import { cardsByIds, cheapestByNames, parseCardJson } from '../services/cards';
 
 export const wantlistRouter = Router();
 
@@ -121,6 +121,21 @@ wantlistRouter.get('/', (req, res) => {
     return cmp * order;
   });
 
+  // Enrich only the returned items with the cheapest-printing lookup so the cost
+  // scales with the page size, not the whole wantlist. The unpaginated list call
+  // (used for location counts) skips enrichment entirely.
+  const enrich = (row: any, cheapestMap: Map<string, { card: any; price: number | null }>) => {
+    const out = { ...row, price: priceOf(row), cheapestCard: null as any, cheapestPrice: null as number | null };
+    if (!row.cardId) {
+      const best = cheapestMap.get(row.cardName.trim().toLowerCase());
+      if (best) {
+        out.cheapestCard = parseCardJson(best.card);
+        out.cheapestPrice = best.price;
+      }
+    }
+    return out;
+  };
+
   const totalCount = filtered.length;
   const totalPages = Math.ceil(totalCount / pageSize);
 
@@ -129,7 +144,10 @@ wantlistRouter.get('/', (req, res) => {
   }
 
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize);
-  res.json({ data: paginated, total: totalCount, page, pageSize, totalPages });
+  const pageGenericNames = Array.from(new Set(paginated.filter(r => !r.cardId).map(r => r.cardName)));
+  const pageCheapest = cheapestByNames(pageGenericNames);
+  const enrichedPage = paginated.map(r => enrich(r, pageCheapest));
+  res.json({ data: enrichedPage, total: totalCount, page, pageSize, totalPages });
 });
 
 wantlistRouter.post('/', (req, res) => {

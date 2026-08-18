@@ -1,6 +1,6 @@
 import { getUserSqlite } from '../db/user';
 import { catalogSqlite } from '../db';
-import { parseCardJson } from './cards';
+import { parseCardJson, cheapestByNames } from './cards';
 
 function userConn(userId: number) {
   return getUserSqlite(userId);
@@ -61,6 +61,9 @@ export interface SharedWantlistItem {
   notes: string | null;
   destinationName: string | null;
   card: ReturnType<typeof parseCardJson> | null;
+  price: number | null;
+  cheapestCard: ReturnType<typeof parseCardJson> | null;
+  cheapestPrice: number | null;
 }
 
 export function getSharedWantlist(userId: number): SharedWantlistItem[] {
@@ -92,8 +95,36 @@ export function getSharedWantlist(userId: number): SharedWantlistItem[] {
     }
   }
 
-  return rows.map(r => ({
-    ...r,
-    card: r.cardId && cardMap.has(r.cardId as never) ? parseCardJson(cardMap.get(r.cardId as never)!) : null,
-  }));
+  // Batch-resolve the cheapest printing for all generic entries in one query.
+  const genericNames = Array.from(new Set(rows.filter(r => !r.cardId).map(r => r.cardName)));
+  const cheapestMap = cheapestByNames(genericNames);
+
+  return rows.map(r => {
+    let card: ReturnType<typeof parseCardJson> | null = null;
+    let price: number | null = null;
+    let cheapestCard: ReturnType<typeof parseCardJson> | null = null;
+    let cheapestPrice: number | null = null;
+
+    if (r.cardId && cardMap.has(r.cardId as never)) {
+      card = parseCardJson(cardMap.get(r.cardId as never)!);
+      let prices: Record<string, any> = {};
+      try { prices = JSON.parse(cardMap.get(r.cardId as never)!.prices ?? '{}'); } catch { prices = {}; }
+      const p = Number(prices[r.foil ? 'usd_foil' : 'usd'] ?? prices.usd);
+      price = Number.isFinite(p) && p > 0 ? p : null;
+    } else {
+      const best = cheapestMap.get(r.cardName.trim().toLowerCase());
+      if (best) {
+        cheapestCard = parseCardJson(best.card);
+        cheapestPrice = best.price;
+      }
+    }
+
+    return {
+      ...r,
+      card,
+      price,
+      cheapestCard,
+      cheapestPrice,
+    };
+  });
 }

@@ -28,13 +28,29 @@ function resolvePrinting(name: string, setCode: string | null, collectorNumber: 
   return null;
 }
 
+// Layouts that are not real playable cards (art cards, tokens, emblems, schemes,
+// etc.) and should never be picked when resolving a card name for a deck.
+const NON_CARD_LAYOUTS = [
+  'art_series',
+  'token',
+  'double_faced_token',
+  'emblem',
+  'scheme',
+  'planar',
+  'vanguard',
+  'augment',
+  'host',
+];
+
 function resolveByName(name: string): { cardId: string; canonicalName: string } | null {
   const lower = name.trim().toLowerCase().replace(/([%_])/g, '\\$1');
+  const placeholders = NON_CARD_LAYOUTS.map(() => '?').join(',');
   const row = catalogSqlite.prepare(
     `SELECT id, name FROM scryfall_cards
-     WHERE lower(name) = ? OR lower(name) LIKE ? ESCAPE '\\'
+     WHERE (lower(name) = ? OR lower(name) LIKE ? ESCAPE '\\')
+       AND layout NOT IN (${placeholders})
      ORDER BY released_at DESC LIMIT 1`
-  ).get(lower, `${lower} // %`) as { id: string; name: string } | undefined;
+  ).get(lower, `${lower} // %`, ...NON_CARD_LAYOUTS) as { id: string; name: string } | undefined;
   return row ? { cardId: row.id, canonicalName: row.name } : null;
 }
 
@@ -513,13 +529,29 @@ decksRouter.delete('/:id/required/:reqId', (req, res) => {
 decksRouter.patch('/:id/required/:reqId', (req, res) => {
   const deckId = Number(req.params.id);
   const reqId = Number(req.params.reqId);
-  const { cardId } = req.body;
+  const { cardId, quantity } = req.body;
   try {
+    const updates: Record<string, any> = {};
+    if (cardId !== undefined) updates.cardId = cardId ?? null;
+    if (quantity !== undefined) {
+      const q = Math.floor(Number(quantity));
+      if (Number.isFinite(q) && q > 0) updates.quantity = Math.min(q, 999);
+    }
     const updated = db.update(schema.deckRequiredCards)
-      .set({ cardId: cardId ?? null })
+      .set(updates)
       .where(and(eq(schema.deckRequiredCards.id, reqId), eq(schema.deckRequiredCards.deckId, deckId)))
       .returning().get();
     if (!updated) return res.status(404).json({ error: 'Required card not found' });
+    // Keep the linked wantlist quantity in sync.
+    if (updated.quantity !== undefined) {
+      const wl = findGhostWantlist(updated.id, updated.cardName);
+      if (wl) {
+        db.update(schema.wantlistItems)
+          .set({ quantity: updated.quantity })
+          .where(eq(schema.wantlistItems.id, wl.id))
+          .run();
+      }
+    }
     res.json(updated);
   } catch (err: any) {
     fail(res, err);
@@ -681,7 +713,7 @@ decksRouter.post('/:id/required/:reqId/fill-external', (req, res) => {
 
       const rawQty = Math.floor(Number(quantity));
       const qty = Number.isFinite(rawQty) && rawQty > 0
-        ? Math.min(rawQty, 999)
+        ? Math.min(rawQty, ghost.quantity || 1, 999)
         : Math.min(ghost.quantity || 1, 999);
 
       // Price: use the supplied value, otherwise autofill the market value of the chosen printing.
@@ -739,11 +771,32 @@ decksRouter.post('/:id/required/:reqId/fill-external', (req, res) => {
         }
       }
 
+      // If we filled fewer than the required amount, keep the remaining difference
+      // as a ghost so the deck still wants the rest (e.g. 10 islands -> fill 1 -> 9 required).
+      const filled = Math.min(qty, ghost.quantity);
+      const remaining = ghost.quantity - filled;
       const wl = findGhostWantlist(ghost.id, ghost.cardName);
-      if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
-      db.delete(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, ghost.id)).run();
 
-      return { item, removedGhost: ghost };
+      if (remaining > 0) {
+        db.update(schema.deckRequiredCards)
+          .set({ quantity: remaining })
+          .where(eq(schema.deckRequiredCards.id, ghost.id))
+          .run();
+        if (wl) {
+          db.update(schema.wantlistItems)
+            .set({ quantity: remaining })
+            .where(eq(schema.wantlistItems.id, wl.id))
+            .run();
+        }
+      } else {
+        if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+        db.delete(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, ghost.id)).run();
+      }
+
+      return {
+        item,
+        remainingGhost: remaining > 0 ? { ...ghost, quantity: remaining } : null,
+      };
     })();
     res.status(201).json(result);
   } catch (err: any) {

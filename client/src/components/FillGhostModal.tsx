@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Modal, Text, Group, Button, ScrollArea, Box, Paper, Badge, NumberInput, Switch,
   SegmentedControl, TextInput, Select, Divider,
@@ -30,7 +30,7 @@ export function FillGhostModal({ opened, onClose, deck, locations, req, onFilled
   deck: { id: number; name: string; locationId: number | null } | null;
   locations: Location[];
   req: FillGhostRequest | null;
-  onFilled: (result: { item: { id: number } }) => void;
+  onFilled: (result: { item: { id: number; quantity: number }; remainingGhost: { id: number; quantity: number } | null }) => void;
 }) {
   const [printings, setPrintings] = useState<ScryfallCard[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,9 +45,15 @@ export function FillGhostModal({ opened, onClose, deck, locations, req, onFilled
   const [dest, setDest] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [filling, setFilling] = useState(false);
+  const loadedKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!opened || !req) return;
+    const key = `${req.id}:${req.cardName}`;
+    // If this exact card is already loaded, don't reset/refetch (avoids the list
+    // flickering empty between renders while printings load).
+    if (loadedKeyRef.current === key) return;
+    loadedKeyRef.current = key;
     setPrintings([]);
     setSelectedId(null);
     setSearch('');
@@ -94,9 +100,21 @@ export function FillGhostModal({ opened, onClose, deck, locations, req, onFilled
   const autofillPrice = selected?.prices?.[foil ? 'usd_foil' : 'usd'] || selected?.prices?.usd || selected?.prices?.usd_foil || '';
 
   const searchTerm = search.trim().toLowerCase();
-  const filteredPrintings = searchTerm
-    ? printings.filter(c => `${c.setCode} ${c.collectorNumber} ${c.setName} ${c.name}`.toLowerCase().includes(searchTerm))
-    : printings;
+  const filteredPrintings = (() => {
+    if (!searchTerm) return printings;
+    // Accept both "set number" and "setnumber", e.g. "znr270" / "znr 270".
+    const setNum = searchTerm.match(/^([a-z]{2,4})\s*(\d+)$/i);
+    if (setNum) {
+      const setLow = setNum[1].toLowerCase();
+      const num = setNum[2].replace(/^0+/, '') || setNum[2];
+      return printings.filter(c => {
+        if (c.setCode.toLowerCase() !== setLow) return false;
+        const cn = (c.collectorNumber || '').toLowerCase();
+        return cn === num || cn.replace(/^0+/, '') === num || cn === setNum[2];
+      });
+    }
+    return printings.filter(c => `${c.setCode} ${c.collectorNumber} ${c.setName} ${c.name}`.toLowerCase().includes(searchTerm));
+  })();
 
   const handleFill = async () => {
     if (!req || !deck || !selectedId) {

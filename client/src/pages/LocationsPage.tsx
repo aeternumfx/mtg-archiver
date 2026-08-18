@@ -292,10 +292,10 @@ export default function LocationsPage() {
           <Group gap="sm">
             <Icon size={18} />
             <div>
-              <Text size="sm" fw={500}>
-                {loc.name}
-                {isInbox ? <Badge size="xs" ml="xs" color="blue" variant="light">Default</Badge> : ''}
-              </Text>
+              <Group gap={6} align="center" wrap="nowrap">
+                <Text size="sm" fw={500}>{loc.name}</Text>
+                {isInbox && <Badge size="xs" color="blue" variant="light">Default</Badge>}
+              </Group>
               {loc.description && <Text size="xs" c="dimmed">{loc.description}</Text>}
               <Text size="xs" c="dimmed">{loc.cardCount ?? 0} cards</Text>
               {goal && (

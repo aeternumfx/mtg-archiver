@@ -183,7 +183,7 @@ collectionRouter.post('/', (req, res) => {
   }
 
   const item = db.insert(schema.collectionItems)
-    .values({ cardId, locationId, destinationId: destinationId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, proxy, misprint, altered, notes: notes ?? null, acquiredAt })
+    .values({ cardId, locationId, destinationId: destinationId ?? null, deckId: loc.deckId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, proxy, misprint, altered, notes: notes ?? null, acquiredAt })
     .returning().get();
 
   const foundCard = cardById(cardId);
@@ -217,6 +217,7 @@ collectionRouter.patch('/:id', (req, res) => {
     const loc = db.select().from(schema.locations).where(eq(schema.locations.id, locationId)).get();
     if (!loc) throw new Error('Location not found');
     updates.locationId = locationId;
+    updates.deckId = loc.deckId ?? null;
   }
   if (destinationId !== undefined) {
     updates.destinationId = destinationId || null;

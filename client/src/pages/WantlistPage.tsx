@@ -5,7 +5,7 @@ import {
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconSearch, IconChevronRight, IconChevronDown, IconFilter, IconArrowUp, IconArrowDown, IconX } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconSearch, IconChevronRight, IconChevronDown, IconFilter, IconArrowUp, IconArrowDown, IconX, IconExternalLink } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, GroupedCard, Condition, Location } from '../types';
@@ -41,6 +41,9 @@ interface WantlistItem {
   setCode: string | null; collectorNumber: string | null;
   foil: number; condition: string | null;
   quantity: number; notes: string | null; destinationId: number | null; collectionGoalId: number | null; persistent: number; createdAt: string;
+  price: number | null;
+  cheapestCard: ScryfallCard | null;
+  cheapestPrice: number | null;
 }
 
 interface Goal {
@@ -237,18 +240,28 @@ export default function WantlistPage() {
   };
 
   const getCardPrice = (item: WantlistItem): number | null => {
-    if (!item.cardId) return null;
-    const data = cardData[item.cardId];
-    if (!data?.prices) return null;
-    const priceStr = item.foil ? data.prices.usd_foil : data.prices.usd;
-    return priceStr ? parseFloat(priceStr) : null;
+    // Specific printing: its own price. Generic: the cheapest available printing.
+    if (item.setCode || item.cardId) {
+      if (item.price != null) return item.price;
+      const data = cardData[item.cardId || ''];
+      if (!data?.prices) return null;
+      const priceStr = item.foil ? data.prices.usd_foil : data.prices.usd;
+      return priceStr ? parseFloat(priceStr) : null;
+    }
+    return item.cheapestPrice ?? null;
   };
 
   const getCardImage = (item: WantlistItem): { imageUris: Record<string, string> | null; cardFaces?: Array<{ image_uris?: Record<string, string> }> | null; layout?: string | null } | null => {
-    if (!item.cardId) return null;
-    const c = cardData[item.cardId];
-    if (!c) return null;
-    return { imageUris: c.imageUris, cardFaces: c.cardFaces, layout: c.layout };
+    if (item.cardId) {
+      const c = cardData[item.cardId];
+      if (!c) return null;
+      return { imageUris: c.imageUris, cardFaces: c.cardFaces, layout: c.layout };
+    }
+    // Generic: show the cheapest available printing's art.
+    if (item.cheapestCard) {
+      return { imageUris: item.cheapestCard.imageUris, cardFaces: item.cheapestCard.cardFaces, layout: item.cheapestCard.layout };
+    }
+    return null;
   };
 
   const cardNames = results.map(g => g.name);
@@ -448,18 +461,27 @@ export default function WantlistPage() {
               <Group key={item.id} p="sm" gap="sm" wrap="nowrap"
                 bg={idx % 2 === 1 ? 'var(--mantine-color-default-hover)' : undefined}>
                 <Box w={32} h={45} style={{ borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
-                  {item.cardId ? <CardThumb card={getCardImage(item) ?? { imageUris: null }} /> : <GhostThumb name={item.cardName} />}
+                  {(() => {
+                    const img = getCardImage(item);
+                    const hasImg = img && (img.imageUris?.small || img.imageUris?.normal || img.cardFaces?.[0]?.image_uris?.small);
+                    return hasImg ? <CardThumb card={img} /> : <GhostThumb name={item.cardName} />;
+                  })()}
                 </Box>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <Text size="sm" fw={500} lineClamp={1}>{item.cardName}</Text>
+                  <Group gap={4} wrap="nowrap">
+                    <Text size="sm" fw={500} lineClamp={1}>{item.cardName}</Text>
+                    {item.setCode ? (
+                      <Badge size="xs" variant="light" color="blue">Specific printing</Badge>
+                    ) : (
+                      <Badge size="xs" variant="light" color="gray">Any printing</Badge>
+                    )}
+                  </Group>
                   {item.setCode ? (
                     <Group gap={4}>
                       <SetSymbol code={item.setCode} name={cardData[item.cardId || '']?.setName || item.setCode.toUpperCase()} size={12} />
                       <Text size="xs" c="dimmed">{item.setCode.toUpperCase()} #{item.collectorNumber}</Text>
                     </Group>
-                  ) : (
-                    <Text size="xs" c="dimmed">Generic</Text>
-                  )}
+                  ) : null}
                   {item.notes && <Text size="xs" c="dimmed" lineClamp={1}>{item.notes}</Text>}
                 </div>
                 <Box style={{ width: 90, flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
@@ -485,12 +507,18 @@ export default function WantlistPage() {
                 <Text size="xs" w={46} ta="center">{item.foil ? '✦' : 'N'}</Text>
                 <Badge size="xs" variant="outline" color="gray" w={46} ta="center">{item.condition || '-'}</Badge>
                 <Text size="xs" w={70} ta="right">
-                  {item.cardId ? (() => {
+                  {(() => {
                     const p = getCardPrice(item);
                     return p !== null ? `$${p.toFixed(2)}` : '-';
-                  })() : '-'}
+                  })()}
                 </Text>
                 <Text size="xs" c="dimmed" w={80} ta="center">{item.createdAt?.slice(0, 10)}</Text>
+                <a href={`https://mtgsingles.co.nz/card/${encodeURIComponent(item.cardName.toLowerCase())}`}
+                  target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+                  <Button size="compact-xs" variant="light" color="green" leftSection={<IconExternalLink size={12} />}>
+                    Buy
+                  </Button>
+                </a>
                 <WantlistFulfilActions item={item} locations={locations}
                   hasInternal={collectionNames.has(item.cardName)}
                   onDone={() => loadItems()} />
@@ -500,7 +528,11 @@ export default function WantlistPage() {
 
             return (
               <CardGroup key={name} card={getCardImage(rep) ?? { imageUris: null }}
-                thumb={rep.cardId ? <CardThumb card={getCardImage(rep) ?? { imageUris: null }} /> : <GhostThumb name={name} />}
+                thumb={(() => {
+                  const img = getCardImage(rep);
+                  const hasImg = img && (img.imageUris?.small || img.imageUris?.normal || img.cardFaces?.[0]?.image_uris?.small);
+                  return hasImg ? <CardThumb card={img} /> : <GhostThumb name={name} />;
+                })()}
                 name={name} manaCost={null} typeLine={null}
                 isSingle={groupItems.length === 1} expanded={isExpanded} onToggle={() => toggleGroup(name)}
                 rightSection={<Badge size="sm" variant="light">{groupItems.length} {groupItems.length !== 1 ? 'cards' : 'card'}</Badge>}
