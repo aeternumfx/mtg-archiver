@@ -28,7 +28,23 @@ dashboardRouter.get('/stats', (_req, res) => {
     return Number(v) || 0;
   };
 
+  // "True" market value values cheap/bulk cards at a realistic floor rather than
+  // their listed market price, since a stack of $0.50 cards wouldn't actually
+  // sell for that. Cards under $1 are counted at $0.01 each; everything else at
+  // full market value.
+  const BULK_THRESHOLD = 1;
+  const BULK_PRICE = 0.01;
+  const truePriceOf = (cardId: string, foil: boolean): number => {
+    const p = priceOf(cardId, foil);
+    return p < BULK_THRESHOLD ? BULK_PRICE : p;
+  };
+
   const marketValue = priceRows.reduce((s, r) => s + r.qty * priceOf(r.cardId, !!r.foil), 0);
+  const trueMarketValue = priceRows.reduce((s, r) => s + r.qty * truePriceOf(r.cardId, !!r.foil), 0);
+  const bulkCards = priceRows.reduce(
+    (s, r) => s + (priceOf(r.cardId, !!r.foil) < BULK_THRESHOLD ? r.qty : 0),
+    0,
+  );
 
   const locRows = sqlite.prepare(`
     SELECT l.id, l.name, COALESCE(SUM(ci.quantity), 0) as count,
@@ -154,6 +170,8 @@ dashboardRouter.get('/stats', (_req, res) => {
     totalCards,
     purchaseValue,
     marketValue,
+    trueMarketValue,
+    bulkCards,
     byLocation,
     deckBreakdown,
     valueHistory,

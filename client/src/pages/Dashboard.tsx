@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Grid, Card, Text, Title, Group, NumberFormatter, Table, SimpleGrid, Box } from '@mantine/core';
+import { Card, Text, Title, Group, NumberFormatter, Table, SimpleGrid, Box, Tooltip } from '@mantine/core';
 import { PieChart, AreaChart, DonutChart } from '@mantine/charts';
 import { IconCards, IconCoin, IconTrendingUp, IconTrendingDown, IconMinus, IconArrowUpRight, IconClock } from '@tabler/icons-react';
 import { api } from '../api/client';
@@ -32,6 +32,8 @@ export default function Dashboard() {
     totalCards: number;
     purchaseValue: number;
     marketValue: number;
+    trueMarketValue: number;
+    bulkCards: number;
     byLocation: Array<{ id: number; name: string; count: number; value: number; marketValue: number }>;
     deckBreakdown: Array<{ id: number; name: string; count: number; value: number; marketValue: number }>;
     valueHistory: Array<{ date: string; totalCards: number; totalValue: number; purchaseValue: number | null }>;
@@ -40,7 +42,7 @@ export default function Dashboard() {
     topCards: Array<{ cardId: string; name: string; setName: string; setCode: string; totalQty: number; totalValue: number; marketPrice: number | null }>;
     recentAdditions: Array<{ cardId: string; name: string; quantity: number; purchasePrice: number | null; createdAt: string }>;
   }>({
-    totalCards: 0, purchaseValue: 0, marketValue: 0, byLocation: [], deckBreakdown: [], valueHistory: [],
+    totalCards: 0, purchaseValue: 0, marketValue: 0, trueMarketValue: 0, bulkCards: 0, byLocation: [], deckBreakdown: [], valueHistory: [],
     rarityBreakdown: [], conditionBreakdown: [], topCards: [], recentAdditions: [],
   });
 
@@ -83,8 +85,8 @@ export default function Dashboard() {
     <>
       <Title order={2} mb="lg">Dashboard</Title>
 
-      <Grid mb="lg" data-tour="dashboard-stats">
-        <Grid.Col span={{ base: 12, sm: 6, md: 3 }}>
+      <SimpleGrid mb="lg" data-tour="dashboard-stats" cols={{ base: 1, sm: 2, lg: 5 }}>
+        
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group>
               <Box w={44} h={44} style={{ borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--mantine-color-blue-1)', color: 'var(--mantine-color-blue-7)' }}>
@@ -96,8 +98,8 @@ export default function Dashboard() {
               </div>
             </Group>
           </Card>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 6, md: 3 }}>
+        
+        
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group>
               <Box w={44} h={44} style={{ borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--mantine-color-green-1)', color: 'var(--mantine-color-green-7)' }}>
@@ -109,8 +111,23 @@ export default function Dashboard() {
               </div>
             </Group>
           </Card>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 6, md: 3 }}>
+        
+        
+          <Card shadow="sm" padding="lg" radius="md" withBorder>
+            <Tooltip label={`${stats.bulkCards} bulk card${stats.bulkCards !== 1 ? 's' : ''} (under $1 each) counted at $0.01 — a realistic "true" value for low-priced bulk.`}>
+              <Group>
+                <Box w={44} h={44} style={{ borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--mantine-color-teal-1)', color: 'var(--mantine-color-teal-7)' }}>
+                  <IconCoin size={24} />
+                </Box>
+                <div>
+                  <Text size="xs" c="dimmed">True Market Value</Text>
+                  <Text size="xl" fw={700}><NumberFormatter value={stats.trueMarketValue} prefix="$" decimalScale={2} fixedDecimalScale /></Text>
+                </div>
+              </Group>
+            </Tooltip>
+          </Card>
+        
+        
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group>
               <Box w={44} h={44} style={{ borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--mantine-color-orange-1)', color: 'var(--mantine-color-orange-7)' }}>
@@ -122,8 +139,8 @@ export default function Dashboard() {
               </div>
             </Group>
           </Card>
-        </Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 6, md: 3 }}>
+        
+        
           <Card shadow="sm" padding="lg" radius="md" withBorder>
             <Group>
               <Box w={44} h={44} style={{ borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', background: unrealizedGL > 0 ? 'var(--mantine-color-green-1)' : unrealizedGL < 0 ? 'var(--mantine-color-red-1)' : 'var(--mantine-color-gray-1)', color: unrealizedGL > 0 ? 'var(--mantine-color-green-7)' : unrealizedGL < 0 ? 'var(--mantine-color-red-7)' : 'var(--mantine-color-gray-7)' }}>
@@ -140,8 +157,8 @@ export default function Dashboard() {
               </div>
             </Group>
           </Card>
-        </Grid.Col>
-      </Grid>
+        
+      </SimpleGrid>
 
       {!cardInCollection && (
         <Text c="dimmed" ta="center" py="xl">Add some cards to your collection to see stats here.</Text>

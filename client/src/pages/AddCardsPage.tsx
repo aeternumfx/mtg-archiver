@@ -138,7 +138,10 @@ export default function AddCardsPage() {
     if (!q) { setGroupedResults([]); setExpanded(new Set()); setPrintings({}); setForms({}); return; }
     setLoading(true);
     try {
-      const isSmart = /^[a-z]{2,4}\s*\d+/i.test(q) || /^s:\S+\s+cn:\S+$/i.test(q);
+      const compact = q.replace(/\s+/g, '');
+      const isSmart = (
+        /^[a-z0-9]+\d+$/i.test(compact) && /[a-z]/i.test(compact)
+      ) || /^s:\S+\s+cn:\S+$/i.test(q);
       if (isSmart) {
         const cards = await api.cards.find(q);
         const groups: Record<string, CardResult[]> = {};

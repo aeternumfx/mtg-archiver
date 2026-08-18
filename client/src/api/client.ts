@@ -28,7 +28,11 @@ export function setOnUnauthorized(fn: (() => void) | null) {
 }
 
 function isAuthProbe(url: string): boolean {
-  return url.includes('/api/auth/me') || url.includes('/api/auth/login');
+  // Requests that legitimately return 401 without meaning "your session expired":
+  // auth probes, and the public share endpoints (password prompts etc.).
+  return url.includes('/api/auth/me')
+    || url.includes('/api/auth/login')
+    || url.includes('/api/share/');
 }
 
 function handleAuthError(status: number, url: string): boolean {
@@ -62,7 +66,7 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 export async function authFetch(url: string, options?: RequestInit): Promise<Response> {
   const res = await fetch(url, { credentials: 'include', ...options });
-  if (res.status === 401) onUnauthorized?.();
+  if (res.status === 401 && !isAuthProbe(url)) onUnauthorized?.();
   return res;
 }
 
@@ -329,6 +333,8 @@ export const api = {
       totalCards: number;
       purchaseValue: number;
       marketValue: number;
+      trueMarketValue: number;
+      bulkCards: number;
       byLocation: Array<{ id: number; name: string; count: number; value: number; marketValue: number }>;
       deckBreakdown: Array<{ id: number; name: string; count: number; value: number; marketValue: number }>;
       valueHistory: Array<{ date: string; totalCards: number; totalValue: number; purchaseValue: number | null }>;

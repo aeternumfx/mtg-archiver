@@ -16,21 +16,17 @@ function parseQuery(q: string): { type: 'setnum' | 'scryfall' | 'name'; set?: st
   const scryfallMatch = q.match(/^s:(\S+)\s+cn:(\S+)$/i);
   if (scryfallMatch) return { type: 'scryfall', set: scryfallMatch[1].toLowerCase(), num: scryfallMatch[2] };
 
-  // [set][collector number], e.g. "blb0234", "sld 123", "mh2 045", "on 1".
-  // Split the leading letters from any trailing set digit and the collector so
-  // we can repartition cleanly and only accept it when the set actually exists
+  // [set][collector number], e.g. "blb0234", "sld 123", "mh2 045", "2x213",
+  // "m211", "on 1". Set codes may contain digits (e.g. "2x2", "m21", "mh2"),
+  // so try every split point and only accept it when the set actually exists
   // (so searches like "the 1" remain name searches).
-  const m = q.match(/^([a-z]{2,4})([0-9]?)\s*(\d+)$/i);
-  if (m) {
-    const letters = m[1].toLowerCase();
-    const optDigit = m[2];
-    const num = m[3];
-    const withDigit = letters + optDigit;
-    if (optDigit && isKnownSet(withDigit)) {
-      return { type: 'setnum', set: withDigit, num };
-    }
-    if (isKnownSet(letters)) {
-      return { type: 'setnum', set: letters, num: optDigit + num };
+  const compact = q.trim().replace(/\s+/g, '').toLowerCase();
+  for (let i = compact.length - 1; i >= 1; i--) {
+    const set = compact.slice(0, i);
+    const num = compact.slice(i);
+    if (!/^\d+$/.test(num)) continue;
+    if (isKnownSet(set)) {
+      return { type: 'setnum', set, num };
     }
   }
 

@@ -40,7 +40,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:', 'https://cards.scryfall.io', 'https://*.scryfall.com'],
+      imgSrc: ["'self'", 'data:', 'https://cards.scryfall.io', 'https://svgs.scryfall.io', 'https://*.scryfall.com'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       connectSrc: ["'self'"],
