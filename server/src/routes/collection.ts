@@ -151,7 +151,7 @@ collectionRouter.post('/', (req, res) => {
 
   if (purchasePrice === undefined || purchasePrice === null) {
     const prices = card.prices ? JSON.parse(card.prices) : {};
-    const usd = prices.usd || prices.usd_foil;
+    const usd = (foil ? prices.usd_foil : prices.usd) || prices.usd || prices.usd_foil;
     if (usd) {
       purchasePrice = parseFloat(usd);
       priceAutofilled = 1;

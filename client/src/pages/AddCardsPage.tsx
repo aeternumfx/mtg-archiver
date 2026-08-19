@@ -542,9 +542,13 @@ export default function AddCardsPage() {
     setForms(prev => ({ ...prev, [cardId]: { ...prev[cardId], selected: !prev[cardId]?.selected } }));
   };
 
-  const getAutoPrice = (card: ScryfallCard): string => {
-    if (card.prices?.usd) return card.prices.usd;
-    if (card.prices?.usd_foil) return card.prices.usd_foil;
+  const getAutoPrice = (card: ScryfallCard, foil: boolean): string => {
+    const p = card.prices;
+    if (!p) return '';
+    if (foil && p.usd_foil) return p.usd_foil;
+    if (!foil && p.usd) return p.usd;
+    if (p.usd) return p.usd;
+    if (p.usd_foil) return p.usd_foil;
     return '';
   };
 
@@ -632,6 +636,7 @@ export default function AddCardsPage() {
       pushUndo(`${added} card${added !== 1 ? 's' : ''} added to ${locName}`, () => undoAdds(adds), 'Undo add');
       setGroupedResults([]); setPrintings({}); setForms({}); setExpanded(new Set());
       setQuery('');
+      searchRef.current?.focus();
     } else if (errors > 0) {
       notifications.show({ title: 'Added with errors', message: `${added} added, ${errors} failed`, color: 'yellow' });
     }
@@ -965,7 +970,7 @@ export default function AddCardsPage() {
                         </Table.Td>
                         <Table.Td onClick={e => e.stopPropagation()}>
                           <TextInput value={f?.purchasePrice ?? ''} onChange={e => updateAndSelect(card.id, { purchasePrice: e.currentTarget.value })}
-                            placeholder={getAutoPrice(card) || '0.00'} size="xs" w={76}
+                            placeholder={getAutoPrice(card, f?.foil ?? false) || '0.00'} size="xs" w={76}
                             leftSection={<Text size="xs" c="dimmed">$</Text>}
                             styles={{ input: hasCustomPrice ? { borderColor: 'var(--mantine-color-teal-5)', borderWidth: 2 } : undefined }} />
                         </Table.Td>
@@ -1054,7 +1059,7 @@ export default function AddCardsPage() {
                             </Table.Td>
                             <Table.Td onClick={e => e.stopPropagation()}>
                               <TextInput value={f?.purchasePrice ?? ''} onChange={e => updateAndSelect(card.id, { purchasePrice: e.currentTarget.value })}
-                                placeholder={getAutoPrice(card) || '0.00'} size="xs" w={76}
+                                placeholder={getAutoPrice(card, f?.foil ?? false) || '0.00'} size="xs" w={76}
                                 leftSection={<Text size="xs" c="dimmed">$</Text>}
                                 styles={{ input: hasCustomPrice ? { borderColor: 'var(--mantine-color-teal-5)', borderWidth: 2 } : undefined }} />
                             </Table.Td>
