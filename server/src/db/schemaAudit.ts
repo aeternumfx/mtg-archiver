@@ -1,11 +1,11 @@
 import type { Database as DatabaseType } from 'better-sqlite3';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const SCHEMA_TABLES: Record<string, string[]> = {
   location_groups: ['id', 'name', 'description', 'sort_order', 'created_at'],
   locations: ['id', 'name', 'description', 'type', 'group_id', 'deck_id', 'built_in', 'created_at'],
-  collection_items: ['id', 'card_id', 'location_id', 'destination_id', 'deck_id', 'foil', 'condition', 'quantity', 'purchase_price', 'price_autofilled', 'pack_opened', 'proxy', 'misprint', 'altered', 'notes', 'acquired_at', 'created_at'],
+  collection_items: ['id', 'card_id', 'location_id', 'destination_id', 'deck_id', 'foil', 'foreign_language', 'condition', 'quantity', 'purchase_price', 'price_autofilled', 'pack_opened', 'proxy', 'misprint', 'altered', 'notes', 'acquired_at', 'created_at'],
   collection_history: ['id', 'date', 'total_cards', 'total_value', 'purchase_value', 'created_at'],
   decks: ['id', 'name', 'description', 'card_id', 'deck_type', 'commander_card_id', 'partner_card_id', 'background_card_id', 'commander_item_id', 'partner_item_id', 'background_item_id', 'group_id', 'created_at'],
   deck_required_cards: ['id', 'deck_id', 'card_id', 'card_name', 'set_code', 'collector_number', 'quantity', 'fill_item_id', 'created_at'],

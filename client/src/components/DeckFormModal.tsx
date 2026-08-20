@@ -1,12 +1,12 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import {
-  Box, Text, Group, Button, Modal, Select, TextInput, Textarea, ScrollArea, SimpleGrid, Badge, Card as MCard, Image, HoverCard,
+  Box, Text, Group, Button, Modal, Select, TextInput, Textarea, ScrollArea, SimpleGrid, Badge, Card as MCard, HoverCard,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { IconPlus, IconSearch } from '@tabler/icons-react';
 import { api } from '../api/client';
 import type { ScryfallCard } from '../types';
-import { CardThumb, SetSymbol } from './CardDisplay';
+import { CardThumb, SetSymbol, ProgressiveImage } from './CardDisplay';
 
 export const DECK_TYPES = [
   { value: 'custom', label: 'Custom' },
@@ -79,7 +79,7 @@ export function CommanderThumb({ card, size = 48 }: { card: ScryfallCard | null;
         <div style={{ display: 'inline-flex' }}>{thumb}</div>
       </HoverCard.Target>
       <HoverCard.Dropdown p={0} style={{ border: 'none', background: 'transparent', pointerEvents: 'none' }}>
-        <Image src={largeSrc} w={320} h={448} fit="contain" radius="sm" />
+        <ProgressiveImage src={largeSrc} placeholder={src} width={320} height={448} fit="contain" />
       </HoverCard.Dropdown>
     </HoverCard>
   );

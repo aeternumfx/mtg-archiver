@@ -1,25 +1,41 @@
 import { systemSqlite } from '../db/system';
 import { createUser, listUsers } from './users';
+import { generateTempPassword } from './password';
+import { ensureSetupToken, isInstanceSetupDone } from '../services/setupStatus';
 
 export function bootstrapAdmin() {
   const count = systemSqlite.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number };
   if (count.c > 0) return;
 
-  const username = process.env.INITIAL_ADMIN_USERNAME || 'admin';
-  const password = process.env.INITIAL_ADMIN_PASSWORD || 'admin';
-  if (!username || !password) {
-    console.warn(
-      'No users exist yet. Set INITIAL_ADMIN_USERNAME/INITIAL_ADMIN_PASSWORD on first boot, or run: npm run create-admin -- --username <name> --password <pass>'
-    );
-    return;
+  const username = (process.env.INITIAL_ADMIN_USERNAME || 'admin').trim();
+  const password = process.env.INITIAL_ADMIN_PASSWORD || '';
+  if (!username) {
+    throw new Error('INITIAL_ADMIN_USERNAME is empty. Set it (or INITIAL_ADMIN_PASSWORD) before first boot.');
   }
-  if (listUsers().some(u => u.username.toLowerCase() === username.toLowerCase())) return;
-  createUser(username, password, 'admin', false);
-  if (!process.env.INITIAL_ADMIN_PASSWORD) {
+  if (!password || password === 'admin') {
+    const temp = generateTempPassword(16);
     console.warn(
-      `Bootstrap admin user "${username}" created with the default password. Change it immediately: Settings -> user menu -> reset password, or set INITIAL_ADMIN_PASSWORD before first boot.`
+      '========================================================================\n' +
+      '  No secure INITIAL_ADMIN_PASSWORD was provided on first boot.\n' +
+      `  A temporary admin password is: ${temp}\n` +
+      '  You MUST change it immediately via the in-app password reset, or set\n' +
+      '  INITIAL_ADMIN_PASSWORD before the next fresh boot.\n' +
+      '========================================================================'
     );
+    createUser(username, temp, 'admin', true);
   } else {
-    console.log(`Bootstrap admin user "${username}" created.`);
+    createUser(username, password, 'admin', false);
+  }
+
+  if (!isInstanceSetupDone()) {
+    const setupToken = ensureSetupToken();
+    console.log(
+      '========================================================================\n' +
+      '  First-time setup is ready.\n' +
+      `  Open the app and use this ONE-TIME setup token:\n` +
+      `    ${setupToken}\n` +
+      '  (This token is only accepted before the instance setup is completed.)\n' +
+      '========================================================================'
+    );
   }
 }

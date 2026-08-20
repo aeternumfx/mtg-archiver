@@ -97,6 +97,7 @@ collectionRouter.get('/', (req, res) => {
     locationId: schema.collectionItems.locationId,
     destinationId: schema.collectionItems.destinationId,
     foil: schema.collectionItems.foil,
+    foreignLanguage: schema.collectionItems.foreignLanguage,
     condition: schema.collectionItems.condition,
     quantity: schema.collectionItems.quantity,
     purchasePrice: schema.collectionItems.purchasePrice,
@@ -127,7 +128,7 @@ collectionRouter.get('/', (req, res) => {
 });
 
 collectionRouter.post('/', (req, res) => {
-  let { cardId, locationId, destinationId, quantity, foil, condition, purchasePrice, priceAutofilled, packOpened, notes, acquiredAt, forceNew, proxy, misprint, altered } = req.body;
+  let { cardId, locationId, destinationId, quantity, foil, foreignLanguage, condition, purchasePrice, priceAutofilled, packOpened, notes, acquiredAt, forceNew, proxy, misprint, altered } = req.body;
 
   if (!cardId || !locationId) {
     return res.status(400).json({ error: 'cardId and locationId are required' });
@@ -140,6 +141,7 @@ collectionRouter.post('/', (req, res) => {
   if (!loc) return res.status(404).json({ error: 'Location not found' });
 
   foil = foil ? 1 : 0;
+  foreignLanguage = foreignLanguage ? 1 : 0;
   condition = condition || null;
   quantity = quantity ?? 1;
   packOpened = packOpened ? 1 : 0;
@@ -164,6 +166,7 @@ collectionRouter.post('/', (req, res) => {
       eq(schema.collectionItems.cardId, cardId),
       eq(schema.collectionItems.locationId, locationId),
       eq(schema.collectionItems.foil, foil),
+      eq(schema.collectionItems.foreignLanguage, foreignLanguage),
       eq(schema.collectionItems.proxy, proxy),
       eq(schema.collectionItems.misprint, misprint),
       eq(schema.collectionItems.altered, altered),
@@ -183,7 +186,7 @@ collectionRouter.post('/', (req, res) => {
   }
 
   const item = db.insert(schema.collectionItems)
-    .values({ cardId, locationId, destinationId: destinationId ?? null, deckId: loc.deckId ?? null, foil, condition, quantity, purchasePrice, priceAutofilled, packOpened, proxy, misprint, altered, notes: notes ?? null, acquiredAt })
+    .values({ cardId, locationId, destinationId: destinationId ?? null, deckId: loc.deckId ?? null, foil, foreignLanguage, condition, quantity, purchasePrice, priceAutofilled, packOpened, proxy, misprint, altered, notes: notes ?? null, acquiredAt })
     .returning().get();
 
   const foundCard = cardById(cardId);
@@ -200,11 +203,12 @@ collectionRouter.patch('/:id', (req, res) => {
   const item = db.select().from(schema.collectionItems).where(eq(schema.collectionItems.id, id)).get();
   if (!item) return res.status(404).json({ error: 'Collection item not found' });
 
-  const { quantity, foil, condition, purchasePrice, packOpened, notes, acquiredAt, destinationId, locationId, proxy, misprint, altered } = req.body;
+  const { quantity, foil, foreignLanguage, condition, purchasePrice, packOpened, notes, acquiredAt, destinationId, locationId, proxy, misprint, altered } = req.body;
 
   const updates: Record<string, unknown> = {};
   if (quantity !== undefined) updates.quantity = quantity;
   if (foil !== undefined) updates.foil = foil ? 1 : 0;
+  if (foreignLanguage !== undefined) updates.foreignLanguage = foreignLanguage ? 1 : 0;
   if (condition !== undefined) updates.condition = condition || null;
   if (purchasePrice !== undefined) updates.purchasePrice = purchasePrice;
   if (packOpened !== undefined) updates.packOpened = packOpened ? 1 : 0;
@@ -290,6 +294,7 @@ collectionRouter.post('/:id/split-copy', (req, res) => {
           locationId: item.locationId,
           destinationId: dest,
           foil: item.foil,
+          foreignLanguage: item.foreignLanguage,
           condition: item.condition,
           quantity: 1,
           purchasePrice: item.purchasePrice,
@@ -363,6 +368,7 @@ collectionRouter.post('/move', (req, res) => {
             eq(schema.collectionItems.cardId, sourceItem.cardId),
             eq(schema.collectionItems.locationId, destinationLocationId),
             eq(schema.collectionItems.foil, sourceItem.foil),
+            eq(schema.collectionItems.foreignLanguage, sourceItem.foreignLanguage),
             eq(schema.collectionItems.proxy, sourceItem.proxy),
             eq(schema.collectionItems.misprint, sourceItem.misprint),
             eq(schema.collectionItems.altered, sourceItem.altered),
@@ -427,6 +433,7 @@ collectionRouter.post('/move', (req, res) => {
               destinationId: null,
               deckId: destDeckId,
               foil: sourceItem.foil,
+              foreignLanguage: sourceItem.foreignLanguage,
               condition: sourceItem.condition,
               quantity: moveQty,
               purchasePrice: sourceItem.purchasePrice,
@@ -471,11 +478,51 @@ collectionRouter.get('/grouped', (req, res) => {
   const valueMax = req.query.valueMax ? Number(req.query.valueMax) : undefined;
   const foilFilter = req.query.foil ? Number(req.query.foil) : undefined;
 
-  const condRank = (cond: string | null): number => {
-    const rank: Record<string, number> = { M: 0, NM: 1, LP: 2, MP: 3, HP: 4, Dmg: 5 };
-    return cond ? (rank[cond] ?? 99) : 99;
+  const nameTokens = q ? q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean) : [];
+
+  const colorInclude: string[] = [];
+  const colorExclude: string[] = [];
+  for (const key of Object.keys(req.query)) {
+    if (key.startsWith('c_') && req.query[key] === 'include') colorInclude.push(key.slice(2).toUpperCase());
+    if (key.startsWith('c_') && req.query[key] === 'exclude') colorExclude.push(key.slice(2).toUpperCase());
+  }
+
+  const rarityList = rarityFilter.split(',').filter(Boolean);
+  const typeList = typeFilter.split(',').filter(Boolean);
+
+  // Card-level filters (name, color identity, rarity, type, cmc) live on cards
+  // in the system catalog, a separate SQLite file from the per-user collection.
+  // We load the user's own distinct cards (bounded by their collection) and
+  // apply these filters against that set in JS, avoiding huge IN clauses over
+  // the entire catalog.
+  const hasCardFilter =
+    nameTokens.length > 0 || colorInclude.length > 0 || colorExclude.length > 0 ||
+    rarityList.length > 0 || typeList.length > 0 ||
+    (cmcMin !== undefined && !isNaN(cmcMin)) || (cmcMax !== undefined && !isNaN(cmcMax));
+
+  const cardMatches = (card: any): boolean => {
+    if (!card) return false;
+    if (nameTokens.length > 0) {
+      const n = card.name.toLowerCase();
+      if (!nameTokens.every(t => n.includes(t.toLowerCase()))) return false;
+    }
+    let identity: string[] = [];
+    if (card.colorIdentity) {
+      try { identity = JSON.parse(card.colorIdentity); } catch { identity = []; }
+    }
+    for (const c of colorInclude) if (!identity.includes(c)) return false;
+    for (const c of colorExclude) if (identity.includes(c)) return false;
+    if (rarityList.length > 0 && !rarityList.includes(card.rarity)) return false;
+    if (typeList.length > 0) {
+      const tl = card.typeLine || '';
+      if (!typeList.some(t => tl.toLowerCase().includes(t.toLowerCase()))) return false;
+    }
+    if (cmcMin !== undefined && !isNaN(cmcMin) && (card.cmc ?? 0) < cmcMin) return false;
+    if (cmcMax !== undefined && !isNaN(cmcMax) && (card.cmc ?? 0) > cmcMax) return false;
+    return true;
   };
 
+  // Per-user item filters (location, deck, group, condition, foil, value).
   let sqlWhere = '';
   const queryParams: any[] = [];
   let joins = '';
@@ -520,105 +567,115 @@ collectionRouter.get('/grouped', (req, res) => {
     queryParams.push(valueMax);
   }
 
-  const nameTokens = q ? q.replace(/['"]/g, '').split(/[,\s]+/).filter(Boolean) : [];
+  const condRank = (cond: string | null): number => {
+    const rank: Record<string, number> = { M: 0, NM: 1, LP: 2, MP: 3, HP: 4, Dmg: 5 };
+    return cond ? (rank[cond] ?? 99) : 99;
+  };
 
-  const colorInclude: string[] = [];
-  const colorExclude: string[] = [];
-  for (const key of Object.keys(req.query)) {
-    if (key.startsWith('c_') && req.query[key] === 'include') colorInclude.push(key.slice(2).toUpperCase());
-    if (key.startsWith('c_') && req.query[key] === 'exclude') colorExclude.push(key.slice(2).toUpperCase());
-  }
-
-  const rarityList = rarityFilter.split(',').filter(Boolean);
-  const typeList = typeFilter.split(',').filter(Boolean);
-
-  const itemsStmt = sqlite.prepare(`
+  // Aggregate the collection in SQL, one row per distinct card, computing the
+  // best condition via a padded rank string so MIN() yields the best label.
+  // This makes the expensive card lookups + JSON parsing scale with the number
+  // of distinct cards rather than total item rows.
+  const condKey = `CASE ci.condition WHEN 'M' THEN '0M' WHEN 'NM' THEN '1NM' WHEN 'LP' THEN '2LP' WHEN 'MP' THEN '3MP' WHEN 'HP' THEN '4HP' WHEN 'Dmg' THEN '5Dmg' ELSE '99' END`;
+  const rawItems = sqlite.prepare(`
     SELECT
-      ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
-      ci.foil, ci.condition, ci.quantity,
-      ci.purchase_price as purchasePrice, ci.price_autofilled as priceAutofilled,
-      ci.pack_opened as packOpened, ci.proxy, ci.misprint, ci.altered, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt
+      ci.card_id as cardId,
+      SUM(ci.quantity) as totalQty,
+      SUM(ci.quantity * ci.purchase_price) as totalValue,
+      MAX(ci.foil) as hasFoil,
+      MIN(${condKey}) as bestCondKey
     FROM collection_items ci
     ${joins}
     ${sqlWhere}
-  `);
+    GROUP BY ci.card_id
+  `).all(...queryParams) as Array<{ cardId: string; totalQty: number; totalValue: number; hasFoil: number; bestCondKey: string | null }>;
 
-  const rawItems = itemsStmt.all(...queryParams) as any[];
-  const cards = cardsByIds(rawItems.map(i => i.cardId));
+  const distinctCardIds = rawItems.map(r => r.cardId).filter(Boolean);
+  if (distinctCardIds.length === 0) {
+    return res.json({ groups: [], total: 0, page, pageSize, totalPages: 0, incoming: locationId ? loadIncoming(locationId) : [] });
+  }
 
-  const matchesCard = (card: any): boolean => {
-    if (!card) return false;
-    if (nameTokens.length > 0) {
-      const n = card.name.toLowerCase();
-      if (!nameTokens.every(t => n.includes(t.toLowerCase()))) return false;
-    }
-    let identity: string[] = [];
-    if (card.colorIdentity) {
-      try { identity = JSON.parse(card.colorIdentity); } catch { identity = []; }
-    }
-    for (const c of colorInclude) if (!identity.includes(c)) return false;
-    for (const c of colorExclude) if (identity.includes(c)) return false;
-    if (rarityList.length > 0 && !rarityList.includes(card.rarity)) return false;
-    if (typeList.length > 0) {
-      const tl = card.typeLine || '';
-      if (!typeList.some(t => tl.toLowerCase().includes(t.toLowerCase()))) return false;
-    }
-    if (cmcMin !== undefined && !isNaN(cmcMin) && (card.cmc ?? 0) < cmcMin) return false;
-    if (cmcMax !== undefined && !isNaN(cmcMax) && (card.cmc ?? 0) > cmcMax) return false;
-    return true;
+  const cards = cardsByIds(distinctCardIds);
+
+  // One entry per distinct card, then merged by name below to preserve the
+  // original "one group per card name (across printings)" behavior.
+  type PerCard = {
+    cardId: string;
+    name: string;
+    card: NonNullable<ReturnType<typeof cards.get>>;
+    setCode: string;
+    totalQty: number;
+    totalValue: number;
+    hasFoil: number;
+    bestCondition: string | null;
   };
-
-  const parsedItems: any[] = [];
-  for (const i of rawItems) {
-    const card = i.cardId ? cards.get(i.cardId) : undefined;
-    if (!matchesCard(card)) continue;
-    parsedItems.push({
-      id: i.id,
-      cardId: i.cardId,
-      locationId: i.locationId,
-      destinationId: i.destinationId,
-      foil: i.foil,
-      condition: i.condition,
-      quantity: i.quantity,
-      purchasePrice: i.purchasePrice,
-      priceAutofilled: i.priceAutofilled,
-      packOpened: i.packOpened,
-      proxy: i.proxy,
-      misprint: i.misprint,
-      altered: i.altered,
-      notes: i.notes,
-      acquiredAt: i.acquiredAt,
-      createdAt: i.createdAt,
-      card: card ? parseCardJson(card) : null,
+  const perCard: PerCard[] = [];
+  for (const r of rawItems) {
+    const card = cards.get(r.cardId);
+    if (!card) continue;
+    if (hasCardFilter && !cardMatches(card)) continue;
+    perCard.push({
+      cardId: r.cardId,
+      name: card.name,
+      card,
+      setCode: card.setCode,
+      totalQty: r.totalQty,
+      totalValue: r.totalValue,
+      hasFoil: r.hasFoil ? 1 : 0,
+      bestCondition: r.bestCondKey && r.bestCondKey !== '99' ? r.bestCondKey.slice(1) : null,
     });
   }
 
-  const groupsMap: Record<string, typeof parsedItems> = {};
-  for (const item of parsedItems) {
-    const key = item.card?.name;
-    if (!key) continue;
-    if (!groupsMap[key]) groupsMap[key] = [];
-    groupsMap[key].push(item);
+  // Merge per-card rows into name groups (across printings/sets).
+  const nameGroups = new Map<string, typeof perCard>();
+  for (const pc of perCard) {
+    if (!nameGroups.has(pc.name)) nameGroups.set(pc.name, []);
+    nameGroups.get(pc.name)!.push(pc);
   }
 
-  const groupsResult = Object.entries(groupsMap).map(([name, items]) => {
-    const card = items[0].card;
-    const totalQty = items.reduce((s, i) => s + i.quantity, 0);
-    const totalValue = items.reduce((s, i) => s + (i.quantity * (i.purchasePrice ?? 0)), 0);
-    const hasFoil = items.some(i => i.foil);
-    const setCodes = [...new Set(items.map(i => i.card.setCode))];
-    const conds = items.map(i => i.condition).filter(Boolean) as string[];
-    conds.sort((a, b) => condRank(a) - condRank(b));
-    return {
-      name, typeLine: card.typeLine, manaCost: card.manaCost, cmc: card.cmc,
-      imageUris: card.imageUris, cardFaces: card.cardFaces, layout: card.layout,
-      setCodes, totalQty, totalValue,
-      hasFoil: hasFoil ? 1 : 0, bestCondition: conds[0] || null,
-      items,
-    };
-  });
+  // Representative card (prefer one whose art we can show) + aggregated stats.
+  type Group = {
+    name: string;
+    typeLine: string | null;
+    manaCost: string | null;
+    cmc: number | null;
+    imageUris: unknown;
+    cardFaces: unknown;
+    layout: string | null;
+    setCodes: string[];
+    totalQty: number;
+    totalValue: number;
+    hasFoil: number;
+    bestCondition: string | null;
+    _members?: PerCard[];
+    items?: any[];
+  };
+  const groups: Group[] = [];
+  for (const [name, members] of nameGroups) {
+    const rep = members[0];
+    const parsed = parseCardJson(rep.card);
+    groups.push({
+      name,
+      typeLine: parsed.typeLine,
+      manaCost: parsed.manaCost,
+      cmc: parsed.cmc,
+      imageUris: parsed.imageUris,
+      cardFaces: parsed.cardFaces,
+      layout: parsed.layout,
+      setCodes: [...new Set(members.map(m => m.setCode))],
+      totalQty: members.reduce((s, m) => s + m.totalQty, 0),
+      totalValue: members.reduce((s, m) => s + m.totalValue, 0),
+      hasFoil: members.some(m => m.hasFoil) ? 1 : 0,
+      bestCondition: members.reduce((best, m) => {
+        if (!best) return m.bestCondition;
+        if (!m.bestCondition) return best;
+        return condRank(m.bestCondition) < condRank(best) ? m.bestCondition : best;
+      }, null as string | null),
+      _members: members,
+    });
+  }
 
-  groupsResult.sort((a, b) => {
+  groups.sort((a, b) => {
     let cmp = 0;
     if (sort === 'name') cmp = a.name.localeCompare(b.name);
     else if (sort === 'qty') cmp = a.totalQty - b.totalQty;
@@ -629,40 +686,95 @@ collectionRouter.get('/grouped', (req, res) => {
     return cmp * order;
   });
 
-  const total = groupsResult.length;
+  const total = groups.length;
   const totalPages = Math.ceil(total / pageSize);
-  const paginated = groupsResult.slice((page - 1) * pageSize, page * pageSize);
+  const pageGroups = groups.slice((page - 1) * pageSize, page * pageSize);
 
-  // Incoming scheduled moves: collection items physically in another location
-  // but scheduled to move into this location. Show them as ghost entries so the
-  // destination location previews what's coming.
-  let incoming: any[] = [];
-  if (locationId) {
-    const incStmt = sqlite.prepare(`
-      SELECT
-        ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
-        ci.foil, ci.condition, ci.quantity, ci.notes,
-        src_loc.name as sourceName
-      FROM collection_items ci
-      JOIN locations src_loc ON src_loc.id = ci.location_id
-      WHERE ci.destination_id = ? AND ci.location_id != ?
-      ORDER BY ci.created_at DESC
-    `);
-    const incRows = incStmt.all(locationId, locationId) as any[];
-    const incCards = cardsByIds(incRows.map(i => i.cardId));
-    incoming = incRows.map(i => ({
-      id: i.id,
-      cardId: i.cardId,
-      locationId: i.locationId,
-      destinationId: i.destinationId,
-      foil: i.foil,
-      condition: i.condition,
-      quantity: i.quantity,
-      notes: i.notes,
-      sourceName: i.sourceName,
-      card: i.cardId && incCards.get(i.cardId) ? parseCardJson(incCards.get(i.cardId)!) : null,
-    }));
+  // Fetch the per-item rows (flags + card details) only for the current page's
+  // cards, then attach them to each group.
+  if (pageGroups.length > 0) {
+    const pageCardIds = [...new Set(pageGroups.flatMap(g => (g._members || []).map(m => m.cardId)))];
+    const itemRows = loadPageItems(pageCardIds, joins, sqlWhere, queryParams);
+    const byCard = new Map<string, any[]>();
+    for (const row of itemRows) {
+      if (!byCard.has(row.cardId)) byCard.set(row.cardId, []);
+      byCard.get(row.cardId)!.push(row);
+    }
+    const pageCardsMap = cardsByIds(pageCardIds);
+    for (const g of pageGroups) {
+      const items: any[] = [];
+      for (const m of g._members || []) {
+        const rows = byCard.get(m.cardId) ?? [];
+        for (const r of rows) {
+          const c = pageCardsMap.get(r.cardId);
+          items.push({ ...r, card: c ? parseCardJson(c) : null });
+        }
+      }
+      g.items = items;
+      delete g._members;
+    }
+  } else {
+    for (const g of pageGroups) { delete g._members; }
   }
 
-  res.json({ groups: paginated, total, page, pageSize, totalPages, incoming });
+  res.json({ groups: pageGroups, total, page, pageSize, totalPages, incoming: locationId ? loadIncoming(locationId) : [] });
 });
+
+// Fetch per-item collection rows for a set of card ids, reusing the same base
+// filter (location/deck/group/condition/foil/value + any card-id filter). The
+// caller supplies the already-built joins/where/params.
+function loadPageItems(cardIds: string[], joins: string, sqlWhere: string, baseParams: unknown[]) {
+  const ids = [...cardIds];
+  if (ids.length === 0) return [];
+  // Rebuild a filtered query: base filter + only these card ids.
+  let where = '';
+  const params: unknown[] = [];
+  if (sqlWhere) {
+    // Strip the leading keyword and rebuild with our own.
+    where = sqlWhere.replace(/^WHERE\s+/i, 'WHERE ');
+    params.push(...baseParams);
+  }
+  const idChunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += 200) idChunks.push(ids.slice(i, i + 200));
+  const idIn = idChunks.map(ch => `ci.card_id IN (${ch.map(() => '?').join(',')})`).join(' OR ');
+  where += `${where ? ' AND ' : 'WHERE '} (${idIn})`;
+  params.push(...idChunks.flat());
+  // Note: card-id filter params in baseParams already bound, so no double-bind.
+  return sqlite.prepare(`
+    SELECT
+      ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
+      ci.foil, ci.foreign_language as foreignLanguage, ci.condition, ci.quantity,
+      ci.purchase_price as purchasePrice, ci.price_autofilled as priceAutofilled,
+      ci.pack_opened as packOpened, ci.proxy, ci.misprint, ci.altered, ci.notes, ci.acquired_at as acquiredAt, ci.created_at as createdAt
+    FROM collection_items ci
+    ${joins}
+    ${where}
+  `).all(...params) as any[];
+}
+
+function loadIncoming(locationId: number): any[] {
+  const incStmt = sqlite.prepare(`
+    SELECT
+      ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.destination_id as destinationId,
+      ci.foil, ci.condition, ci.quantity, ci.notes,
+      src_loc.name as sourceName
+    FROM collection_items ci
+    JOIN locations src_loc ON src_loc.id = ci.location_id
+    WHERE ci.destination_id = ? AND ci.location_id != ?
+    ORDER BY ci.created_at DESC
+  `);
+  const incRows = incStmt.all(locationId, locationId) as any[];
+  const incCards = cardsByIds(incRows.map(i => i.cardId));
+  return incRows.map(i => ({
+    id: i.id,
+    cardId: i.cardId,
+    locationId: i.locationId,
+    destinationId: i.destinationId,
+    foil: i.foil,
+    condition: i.condition,
+    quantity: i.quantity,
+    notes: i.notes,
+    sourceName: i.sourceName,
+    card: i.cardId && incCards.get(i.cardId) ? parseCardJson(incCards.get(i.cardId)!) : null,
+  }));
+}

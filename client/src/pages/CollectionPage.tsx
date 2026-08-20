@@ -220,7 +220,7 @@ export default function CollectionPage() {
   const [editItem, setEditItem] = useState<CollectionItem | null>(null);
   const [editOpened, { open: openEdit, close: closeEdit }] = useDisclosure(false);
   const [deleteConfirmOpened, { open: openDeleteConfirm, close: closeDeleteConfirm }] = useDisclosure(false);
-  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '' });
+  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, foreignLanguage: false, condition: '' as Condition | '', purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '' });
   const [editDestLoc, setEditDestLoc] = useState<string | null>(null);
   const [destOpened, { open: openDest, close: closeDest }] = useDisclosure(false);
   const [destItem, setDestItem] = useState<CollectionItem | null>(null);
@@ -566,6 +566,7 @@ export default function CollectionPage() {
     setEditForm({
       quantity: item.quantity,
       foil: !!item.foil,
+      foreignLanguage: !!item.foreignLanguage,
       condition: (item.condition || '') as Condition | '',
       purchasePrice: item.purchasePrice ? String(item.purchasePrice) : '',
       packOpened: !!item.packOpened,
@@ -605,6 +606,7 @@ export default function CollectionPage() {
       await api.collection.update(itemId, {
         quantity: editForm.quantity,
         foil: editForm.foil ? 1 : 0,
+        foreignLanguage: editForm.foreignLanguage ? 1 : 0,
         condition: editForm.condition || null,
         purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null,
         packOpened: editForm.packOpened ? 1 : 0,
@@ -1216,6 +1218,7 @@ export default function CollectionPage() {
               <Switch label="Proxy" checked={editForm.proxy} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, proxy: v })); }} />
               <Switch label="Misprint" checked={editForm.misprint} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, misprint: v })); }} />
               <Switch label="Altered" checked={editForm.altered} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, altered: v })); }} />
+              <Switch label="Foreign language" checked={editForm.foreignLanguage} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, foreignLanguage: v })); }} color="teal" />
             </Group>
             <TextInput label="Notes" value={editForm.notes} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, notes: v })); }} mb="sm" />
             <Select label="Destination (optional)" placeholder="No destination" clearable

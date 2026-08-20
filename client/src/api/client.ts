@@ -19,6 +19,7 @@ export interface WantlistItemType {
   price: number | null;
   cheapestCard: ScryfallCard | null;
   cheapestPrice: number | null;
+  card?: ScryfallCard | null;
 }
 
 let onUnauthorized: (() => void) | null = null;
@@ -135,8 +136,8 @@ export const api = {
       }),
     demoLogin: () =>
       request<{ user: AuthUser }>('/api/auth/demo-login', { method: 'POST' }),
-    setupLogin: () =>
-      request<{ user: AuthUser }>('/api/auth/setup-login', { method: 'POST' }),
+    setupLogin: (token: string) =>
+      request<{ user: AuthUser }>('/api/auth/setup-login', { method: 'POST', body: JSON.stringify({ token }) }),
     logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
     exitImpersonation: () => request<{ ok: boolean }>('/api/auth/exit-impersonation', { method: 'POST' }),
     changePassword: (currentPassword: string, newPassword: string) =>
@@ -194,6 +195,7 @@ export const api = {
           cardId: string;
           locationId: number;
           foil: number;
+          foreignLanguage: number;
           condition: string | null;
           quantity: number;
           proxy: number;
@@ -528,6 +530,8 @@ export const api = {
       destinationId?: number | null;
     }) =>
       request<{ item: { id: number; quantity: number }; remainingGhost: { id: number; deckId: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } | null }>(`/api/decks/${id}/required/${reqId}/fill-external`, { method: 'POST', body: JSON.stringify(data) }),
+    fillRequiredExternalBulk: (id: number, reqIds: number[]) =>
+      request<{ results: Array<{ reqId: number; itemId: number; quantity: number; remainingGhost: { id: number; quantity: number } | null; ghost: { cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } }> }>(`/api/decks/${id}/required/fill-external-bulk`, { method: 'POST', body: JSON.stringify({ reqIds }) }),
     moveRequired: (id: number, reqId: number, data: { destinationType: 'location' | 'deck'; destinationId: number }) =>
       request<any>(`/api/decks/${id}/required/${reqId}/move`, { method: 'POST', body: JSON.stringify(data) }),
     importDeck: (data: { name: string; description?: string; deckType?: string; content: string; format?: 'auto' | 'csv' | 'text' }) =>
@@ -546,6 +550,7 @@ export const api = {
       locationId: number;
       quantity?: number;
       foil?: boolean;
+      foreignLanguage?: boolean;
       condition?: string | null;
       purchasePrice?: number | null;
       packOpened?: boolean;
@@ -563,6 +568,7 @@ export const api = {
       locationId: number;
       quantity?: number;
       foil?: boolean;
+      foreignLanguage?: boolean;
       condition?: string | null;
       purchasePrice?: number | null;
       packOpened?: boolean;

@@ -64,6 +64,7 @@ export const IMPORT_ENTITIES: ImportEntity[] = [
       f('destinationId', 'destination_id', 'integer', { default: null }),
       f('deckId', 'deck_id', 'integer', { default: null }),
       f('foil', 'foil', 'integer', { default: 0 }),
+      f('foreignLanguage', 'foreign_language', 'integer', { default: 0 }),
       f('condition', 'condition', 'text', { default: null }),
       f('quantity', 'quantity', 'integer', { default: 1 }),
       f('purchasePrice', 'purchase_price', 'real', { default: null }),

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Component, type ReactNode, type CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput,
+  Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput, Checkbox,
   LoadingOverlay, Box, Paper, Badge, ActionIcon, Tooltip, ScrollArea, Select, Switch, NumberInput, SegmentedControl, Collapse,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -10,11 +10,11 @@ import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, 
 import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
-import { CardThumb, SetSymbol, GhostThumb, CopyTags } from '../components/CardDisplay';
+import { CardThumb, SetSymbol, GhostThumb, CopyTags, prefetchCardImage } from '../components/CardDisplay';
 import { DeckFormModal, DECK_TYPES, CommanderThumb, DeckArtwork, type DeckFormValues } from '../components/DeckFormModal';
 import { DeckImportModal, type DeckImportResult } from '../components/DeckImportModal';
 import { FillGhostModal } from '../components/FillGhostModal';
-import { CardPrefetch } from '../components/CardPrefetch';
+import { CardPrefetch, cardLargeUrls, cardSmallUrls } from '../components/CardPrefetch';
 import { CardGroup } from '../components/CardGroup';
 import { useUndo } from '../components/UndoToasts';
 
@@ -140,7 +140,7 @@ export default function DecksPage() {
   const [deckGroupExpanded, setDeckGroupExpanded] = useState<Set<string>>(new Set());
   const { push: pushUndo } = useUndo();
   const [editItem, setEditItem] = useState<CollectionItem | null>(null);
-  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, condition: '' as Condition | '', purchasePrice: '', proxy: false, misprint: false, altered: false, notes: '' });
+  const [editForm, setEditForm] = useState({ quantity: 1, foil: false, foreignLanguage: false, condition: '' as Condition | '', purchasePrice: '', proxy: false, misprint: false, altered: false, notes: '' });
   const [editCardOpened, { open: openEditCard, close: closeEditCard }] = useDisclosure(false);
   const [moveItems, setMoveItems] = useState<CollectionItem[]>([]);
   const [moveDestLoc, setMoveDestLoc] = useState<string | null>(null);
@@ -150,8 +150,14 @@ export default function DecksPage() {
   const [ghostMoveDestType, setGhostMoveDestType] = useState<'location' | 'deck'>('location');
   const [ghostMoveDestId, setGhostMoveDestId] = useState<string | null>(null);
   const [fillReqId, setFillReqId] = useState<number | null>(null);
-  const [fillExtReq, setFillExtReq] = useState<RequiredCard | null>(null);
+  const [fillExtReqId, setFillExtReqId] = useState<number | null>(null);
+  const [fillQueueIds, setFillQueueIds] = useState<number[]>([]);
+  const [selectedReqIds, setSelectedReqIds] = useState<Set<number>>(new Set());
   const [fillExtOpened, { open: openFillExt, close: closeFillExt }] = useDisclosure(false);
+  const fillExtReq = useMemo(
+    () => (fillExtReqId !== null ? requiredCards.find(r => r.id === fillExtReqId) ?? null : null),
+    [fillExtReqId, requiredCards],
+  );
   const [fillCardName, setFillCardName] = useState('');
   const [fillCollectionItems, setFillCollectionItems] = useState<CollectionItem[]>([]);
   const [fillOpened, { open: openFill, close: closeFill }] = useDisclosure(false);
@@ -255,6 +261,16 @@ export default function DecksPage() {
     return () => clearTimeout(timeout);
   }, [addCardSearch]);
 
+  // Prefetch thumbnails and hover-preview images for the current Add Cards
+  // search results so hovering a card doesn't wait on a first-time image fetch.
+  useEffect(() => {
+    const cards = [...addCardResults, ...Object.values(addPrintings).flat()];
+    for (const card of cards) {
+      for (const url of cardLargeUrls(card)) prefetchCardImage(url);
+      for (const url of cardSmallUrls(card)) prefetchCardImage(url);
+    }
+  }, [addCardResults, addPrintings]);
+
   useEffect(() => {
     if (artworkSearch.trim().length < 2) { setArtworkResults([]); return; }
     const timeout = setTimeout(async () => {
@@ -292,6 +308,7 @@ export default function DecksPage() {
     setSelectedDeck(null);
     setDeckCards([]);
     setRequiredCards([]);
+    setSelectedReqIds(new Set());
     sessionStorage.removeItem('mtg-deck-open');
     setSearchParams({}, { replace: true });
   };
@@ -480,20 +497,23 @@ export default function DecksPage() {
   };
 
   const handleFillExternal = (req: RequiredCard) => {
-    setFillExtReq(req);
+    setFillQueueIds([req.id]);
+    setFillExtReqId(req.id);
     openFillExt();
   };
 
   const closeFillExternal = () => {
     closeFillExt();
-    setFillExtReq(null);
+    setFillExtReqId(null);
+    setFillQueueIds([]);
+    setSelectedReqIds(new Set());
   };
 
   const handleFilledExternal = async (result: { item: { id: number; quantity: number }; remainingGhost: { id: number; quantity: number } | null }) => {
-    const req = fillExtReq;
+    const reqId = fillExtReqId;
+    const req = reqId !== null ? requiredCards.find(r => r.id === reqId) ?? null : null;
     const deck = selectedDeck;
     const filledQty = result.item.quantity || 1;
-    closeFillExternal();
     if (!req || !deck) return;
     if (result.remainingGhost) {
       pushUndo(`${req.cardName} filled externally (${filledQty}/${req.quantity})`, async () => {
@@ -533,6 +553,72 @@ export default function DecksPage() {
       color: 'green',
     });
     loadDeckCards(deck.id);
+
+    // Advance to the next queued ghost, skipping any that no longer exist.
+    const advanceQueue = (ids: number[]): void => {
+      if (ids.length === 0) { closeFillExternal(); return; }
+      const found = requiredCards.find(r => r.id === ids[0]);
+      if (found) {
+        setFillQueueIds(ids);
+        setFillExtReqId(found.id);
+      } else {
+        advanceQueue(ids.slice(1));
+      }
+    };
+    advanceQueue(fillQueueIds.filter(id => id !== reqId));
+  };
+
+  const handleBulkFillExternal = async () => {
+    const deck = selectedDeck;
+    const reqs = filteredRequiredCards.filter(r => r.fillItemId == null && selectedReqIds.has(r.id));
+    if (!deck || reqs.length === 0) return;
+    const generic = reqs.filter(r => !r.cardId && !(r.setCode && r.collectorNumber));
+    if (generic.length > 0) {
+      const names = generic.map(r => `"${r.cardName}"`).join(', ');
+      notifications.show({
+        title: 'Cannot bulk fill',
+        message: `Bulk filling is only supported for specific printings. ${names} ${generic.length > 1 ? 'are' : 'is'} generic (any printing). Fill it individually to pick a printing.`,
+        color: 'red', autoClose: 15000,
+      });
+      return;
+    }
+    try {
+      setCardsLoading(true);
+      const res = await api.decks.fillRequiredExternalBulk(deck.id, reqs.map(r => r.id));
+      pushUndo(`Filled ${res.results.length} card(s) externally`, async () => {
+        for (const r of res.results) {
+          await api.collection.remove(r.itemId).catch(() => {});
+          const created = await api.decks.addRequired(deck.id, {
+            cardId: r.ghost.cardId ?? undefined,
+            cardName: r.ghost.cardName,
+            setCode: r.ghost.setCode ?? undefined,
+            collectorNumber: r.ghost.collectorNumber ?? undefined,
+            quantity: r.ghost.quantity,
+          }).catch(() => null);
+          if (created?.id) {
+            await api.wantlist.add({
+              cardId: r.ghost.cardId ?? undefined,
+              cardName: r.ghost.cardName,
+              setCode: r.ghost.setCode ?? undefined,
+              collectorNumber: r.ghost.collectorNumber ?? undefined,
+              quantity: r.ghost.quantity,
+              notes: `Wanted for deck: ${deck.name}`,
+              destinationId: deck.locationId,
+              deckRequiredId: created.id,
+            }).catch(() => {});
+          }
+        }
+        loadDeckCards(deck.id);
+      }, 'Undo bulk fill');
+      notifications.show({ title: 'Filled', message: `${res.results.length} card(s) filled externally with default (NM) settings`, color: 'green' });
+      setSelectedReqIds(new Set());
+      loadDeckCards(deck.id);
+    } catch (err: any) {
+      notifications.show({ title: 'Bulk fill failed', message: err.message, color: 'red', autoClose: 15000 });
+      loadDeckCards(deck.id);
+    } finally {
+      setCardsLoading(false);
+    }
   };
 
   const openFillDialog = async (req: RequiredCard) => {
@@ -716,7 +802,7 @@ export default function DecksPage() {
   const openEditCardDialog = (item: CollectionItem) => {
     setEditItem(item);
     setEditForm({
-      quantity: item.quantity, foil: !!item.foil,
+      quantity: item.quantity, foil: !!item.foil, foreignLanguage: !!item.foreignLanguage,
       condition: (item.condition || '') as Condition | '',
       purchasePrice: item.purchasePrice ? String(item.purchasePrice) : '',
       proxy: !!item.proxy, misprint: !!item.misprint, altered: !!item.altered,
@@ -729,7 +815,7 @@ export default function DecksPage() {
     if (!editItem) return;
     try {
       await api.collection.update(editItem.id, {
-        quantity: editForm.quantity, foil: editForm.foil ? 1 : 0, condition: editForm.condition || null,
+        quantity: editForm.quantity, foil: editForm.foil ? 1 : 0, foreignLanguage: editForm.foreignLanguage ? 1 : 0, condition: editForm.condition || null,
         purchasePrice: editForm.purchasePrice ? parseFloat(editForm.purchasePrice) : null,
         proxy: editForm.proxy ? 1 : 0, misprint: editForm.misprint ? 1 : 0, altered: editForm.altered ? 1 : 0,
         notes: editForm.notes || null,
@@ -874,6 +960,28 @@ export default function DecksPage() {
     if (deckColorFilter) return false;
     return true;
   });
+
+  const selectableFiltered = filteredRequiredCards.filter(r => r.fillItemId == null);
+  const selectedCount = selectableFiltered.filter(r => selectedReqIds.has(r.id)).length;
+  const allSelected = selectableFiltered.length > 0 && selectableFiltered.every(r => selectedReqIds.has(r.id));
+  const someSelected = selectableFiltered.length > 0 && selectableFiltered.some(r => selectedReqIds.has(r.id));
+
+  const toggleReqSelect = (id: number) => {
+    setSelectedReqIds(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedReqIds(prev => {
+      const n = new Set(prev);
+      if (allSelected) selectableFiltered.forEach(r => n.delete(r.id));
+      else selectableFiltered.forEach(r => n.add(r.id));
+      return n;
+    });
+  };
 
   const formatKey = selectedDeck?.deckType === 'commander' ? 'commander' : (selectedDeck?.deckType || '');
   const isCardLegal = (card: { legalities?: Record<string, string> | null }): boolean => {
@@ -1276,9 +1384,21 @@ export default function DecksPage() {
 
             {filteredRequiredCards.length > 0 && (
               <>
-                <Group mt="lg" mb="sm">
-                  <IconList size={16} opacity={0.5} />
-                  <Text size="sm" c="dimmed">Required Cards ({filteredRequiredCards.length})</Text>
+                <Group mt="lg" mb="sm" justify="space-between" wrap="nowrap">
+                  <Group gap={6}>
+                    <IconList size={16} opacity={0.5} />
+                    <Text size="sm" c="dimmed">Required Cards ({filteredRequiredCards.length})</Text>
+                  </Group>
+                  {filteredRequiredCards.length > 0 && (
+                    <Group gap="xs" wrap="nowrap">
+                      <Checkbox size="xs" label="Select all" checked={allSelected}
+                        indeterminate={someSelected && !allSelected} onChange={toggleSelectAll} />
+                      <Button size="compact-xs" variant="light" color="green" leftSection={<IconExternalLink size={12} />}
+                        disabled={selectedCount === 0} onClick={handleBulkFillExternal}>
+                        Fill externally ({selectedCount})
+                      </Button>
+                    </Group>
+                  )}
                 </Group>
                 {filteredRequiredCards.map(req => {
                   const nameL = req.cardName.toLowerCase();
@@ -1299,6 +1419,8 @@ export default function DecksPage() {
                           ? { border: '2px solid var(--mantine-color-teal-6)', filter: 'grayscale(0.4)' }
                           : { filter: 'grayscale(0.6)' }}>
                     <Group p="sm" gap="sm" wrap="nowrap">
+                      <Checkbox size="xs" checked={selectedReqIds.has(req.id)} disabled={pendingFill}
+                        onChange={() => toggleReqSelect(req.id)} />
                       <GhostThumb name={req.cardName} cardId={req.cardId} />
                       <div style={{ flex: 1 }}>
                         <Group gap={4} wrap="nowrap">
@@ -1445,6 +1567,7 @@ export default function DecksPage() {
               <Switch label="Proxy" checked={editForm.proxy} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, proxy: v })); }} />
               <Switch label="Misprint" checked={editForm.misprint} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, misprint: v })); }} />
               <Switch label="Altered" checked={editForm.altered} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, altered: v })); }} />
+              <Switch label="Foreign language" checked={editForm.foreignLanguage} onChange={e => { const v = e.currentTarget.checked; setEditForm(f => ({ ...f, foreignLanguage: v })); }} color="teal" />
             </Group>
             <TextInput label="Notes" value={editForm.notes} onChange={e => { const v = e.currentTarget.value; setEditForm(f => ({ ...f, notes: v })); }} mb="md" />
             <Group justify="flex-end"><Button variant="default" onClick={closeEditCard}>Cancel</Button><Button onClick={handleSaveEditCard}>Save</Button></Group>

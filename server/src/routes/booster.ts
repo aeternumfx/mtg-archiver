@@ -1,8 +1,8 @@
 import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
-import { eq, desc } from 'drizzle-orm';
-import { cardById } from '../services/cards';
+import { eq, desc, inArray } from 'drizzle-orm';
+import { cardsByIds } from '../services/cards';
 
 export const boosterRouter = Router();
 
@@ -11,13 +11,18 @@ boosterRouter.get('/history', (_req, res) => {
     .orderBy(desc(schema.boosterSessions.createdAt))
     .all();
 
-  const result = sessions.map(s => ({
-    ...s,
-    pulls: db.select().from(schema.boosterPulls)
-      .where(eq(schema.boosterPulls.sessionId, s.id))
-      .all(),
-  }));
+  if (sessions.length === 0) return res.json([]);
+  const sessionIds = sessions.map(s => s.id);
+  const allPulls = db.select().from(schema.boosterPulls)
+    .where(inArray(schema.boosterPulls.sessionId, sessionIds))
+    .all();
+  const bySession = new Map<number, typeof allPulls>();
+  for (const p of allPulls) {
+    if (!bySession.has(p.sessionId)) bySession.set(p.sessionId, []);
+    bySession.get(p.sessionId)!.push(p);
+  }
 
+  const result = sessions.map(s => ({ ...s, pulls: bySession.get(s.id) ?? [] }));
   res.json(result);
 });
 
@@ -43,8 +48,9 @@ boosterRouter.post('/finish', (req, res) => {
 
   try {
     const result = sqlite.transaction(() => {
+      const cards = cardsByIds(pulls.map((p: any) => p.cardId));
       const totalValue = pulls.reduce((sum: number, p: any) => {
-        const card = cardById(p.cardId);
+        const card = cards.get(p.cardId);
         if (card && card.prices) {
           const prices = JSON.parse(card.prices);
           const val = p.foil ? prices.usd_foil : prices.usd;

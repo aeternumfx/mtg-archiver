@@ -44,6 +44,7 @@ interface WantlistItem {
   price: number | null;
   cheapestCard: ScryfallCard | null;
   cheapestPrice: number | null;
+  card?: ScryfallCard | null;
 }
 
 interface Goal {
@@ -104,13 +105,13 @@ export default function WantlistPage() {
         if (item.destinationId) counts[item.destinationId] = (counts[item.destinationId] || 0) + 1;
       }
       setLocationCounts(counts);
+      // Populate card details from the embedded card (server now returns it), so
+      // we avoid a separate request per item.
+      const next: Record<string, ScryfallCard> = {};
       for (const item of data.data) {
-        if (item.cardId && !cardData[item.cardId]) {
-          api.cards.get(item.cardId).then(c => {
-            setCardData(prev => ({ ...prev, [item.cardId!]: c }));
-          }).catch(() => {});
-        }
+        if (item.card && item.cardId) next[item.cardId] = item.card;
       }
+      if (Object.keys(next).length) setCardData(prev => ({ ...prev, ...next }));
     } catch {
       notifications.show({ title: 'Error', message: 'Failed to load wantlist', color: 'red' });
     } finally {

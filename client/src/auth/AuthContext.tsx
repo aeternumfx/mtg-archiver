@@ -8,7 +8,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (username: string, password: string) => Promise<AuthUser>;
   demoLogin: () => Promise<AuthUser>;
-  setupLogin: () => Promise<AuthUser>;
+  setupLogin: (token: string) => Promise<AuthUser>;
   logout: () => Promise<void>;
   setUser: (user: AuthUser | null) => void;
   refresh: () => Promise<void>;
@@ -64,8 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return u;
   }, []);
 
-  const setupLogin = useCallback(async () => {
-    const { user: u } = await api.auth.setupLogin();
+  const setupLogin = useCallback(async (token: string) => {
+    const { user: u } = await api.auth.setupLogin(token);
     setUser(u);
     return u;
   }, []);

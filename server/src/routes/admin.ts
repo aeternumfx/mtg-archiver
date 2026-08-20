@@ -15,7 +15,7 @@ import { getActivity, clearActivity } from '../services/activityLog';
 import { clearAllRequests } from '../services/requests';
 import { clearImageCache } from '../services/images';
 import { getSystemSettings, updateSystemSettings, resetSystemSettings } from '../services/systemSettings';
-import { isUserSetupDone, resetUserTour, isInstanceSetupDone, markInstanceSetupDone, markInstanceSetupPending, markUserSetupDone } from '../services/setupStatus';
+import { isUserSetupDone, resetUserTour, isInstanceSetupDone, markInstanceSetupDone, markInstanceSetupPending, markUserSetupDone, ensureSetupToken } from '../services/setupStatus';
 import { createBackupZip } from '../services/backup';
 import { appVersion, autoUpdateAvailable, checkForUpdates, runAutoUpdate } from '../services/updates';
 import { restoreFromBackup } from '../services/restore';
@@ -191,6 +191,13 @@ adminRouter.post('/reset-instance', (req, res) => {
   clearImageCache();
   resetSystemSettings();
   markInstanceSetupPending();
+  const setupToken = ensureSetupToken();
+  console.log(
+    '========================================================================\n' +
+    `  Instance reset. New ONE-TIME setup token:\n` +
+    `    ${setupToken}\n` +
+    '========================================================================'
+  );
   res.json({ message: 'Instance reset. All other users and their data were removed; settings and logs cleared. The first-time setup will run again.' });
 });
 

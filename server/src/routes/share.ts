@@ -8,6 +8,7 @@ import {
 } from '../auth/users';
 import { getSharedCollection, getSharedWantlist } from '../services/share';
 import { getSharesSecret, ensureSharesSecret } from '../services/shareSecret';
+import { SCRYPT_OPTIONS } from '../auth/password';
 
 export const shareRouter = Router();
 export const profilePrivacyRouter = Router();
@@ -147,7 +148,7 @@ profilePrivacyRouter.put('/', requireAuth, (req: AuthenticatedRequest, res) => {
   }
 });
 
-const SCRYPT_COST = { N: 2 ** 16, r: 8, p: 1, maxmem: 128 * 1024 * 1024 } as const;
+const SCRYPT_COST = { ...SCRYPT_OPTIONS };
 
 function hashFrom(pw: string): string {
   const salt = randomBytes(16).toString('hex');

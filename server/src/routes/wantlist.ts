@@ -125,8 +125,12 @@ wantlistRouter.get('/', (req, res) => {
   // scales with the page size, not the whole wantlist. The unpaginated list call
   // (used for location counts) skips enrichment entirely.
   const enrich = (row: any, cheapestMap: Map<string, { card: any; price: number | null }>) => {
-    const out = { ...row, price: priceOf(row), cheapestCard: null as any, cheapestPrice: null as number | null };
-    if (!row.cardId) {
+    const out: any = { ...row, price: priceOf(row), cheapestCard: null as any, cheapestPrice: null as number | null };
+    if (row.cardId) {
+      const c = cards.get(row.cardId);
+      // Embed the specific printing's card so the client need not fetch it per item.
+      out.card = c ? parseCardJson(c) : null;
+    } else {
       const best = cheapestMap.get(row.cardName.trim().toLowerCase());
       if (best) {
         out.cheapestCard = parseCardJson(best.card);

@@ -128,6 +128,7 @@ export function initSystemSchema(sqlite: DatabaseType) {
   addScCol('card_faces', 'TEXT');
 
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sc_name ON scryfall_cards(name)`);
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sc_name_nocase ON scryfall_cards(name COLLATE NOCASE)`);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sc_set ON scryfall_cards(set_code)`);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sc_color ON scryfall_cards(color_identity)`);
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_sc_type ON scryfall_cards(type_line)`);

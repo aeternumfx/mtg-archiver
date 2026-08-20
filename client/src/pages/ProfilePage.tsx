@@ -351,76 +351,78 @@ export default function ProfilePage() {
       </Modal>
     </Paper>
 
-      <Paper withBorder p="lg" radius="md">
-        <Group justify="space-between" mb="md">
-          <Title order={3}>Sharing & Privacy</Title>
-          <Button size="compact-sm" onClick={savePrivacy} loading={privacySaving}>Save</Button>
-        </Group>
-        <Text size="sm" c="dimmed" mb="lg">
-          Control how your Collection and Wantlist can be seen by friends. You can share a link, and optionally
-          protect each view with a password. Shared views are read-only.
-        </Text>
+      {user?.role !== 'admin' && (
+        <Paper withBorder p="lg" radius="md">
+          <Group justify="space-between" mb="md">
+            <Title order={3}>Sharing & Privacy</Title>
+            <Button size="compact-sm" onClick={savePrivacy} loading={privacySaving}>Save</Button>
+          </Group>
+          <Text size="sm" c="dimmed" mb="lg">
+            Control how your Collection and Wantlist can be seen by friends. You can share a link, and optionally
+            protect each view with a password. Shared views are read-only.
+          </Text>
 
-        {privacyMsg && (
-          <Alert color={privacyMsg.type === 'ok' ? 'green' : 'red'} mb="md" withCloseButton onClose={() => setPrivacyMsg(null)}>
-            {privacyMsg.text}
-          </Alert>
-        )}
+          {privacyMsg && (
+            <Alert color={privacyMsg.type === 'ok' ? 'green' : 'red'} mb="md" withCloseButton onClose={() => setPrivacyMsg(null)}>
+              {privacyMsg.text}
+            </Alert>
+          )}
 
-        {privacyLoading ? (
-          <Group justify="center" py="lg"><Loader size="sm" /></Group>
-        ) : (
-          <>
-            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg" mb="xl">
-              <Box>
-                <Text size="sm" fw={600} mb={6}>Collection</Text>
-                <SegmentedControl fullWidth mb="sm"
-                  value={privacy.collectionPrivacy}
-                  onChange={v => setPrivacy(p => ({ ...p, collectionPrivacy: v }))}
-                  data={[
-                    { value: 'public', label: 'Public' },
-                    { value: 'password', label: 'Password' },
-                    { value: 'private', label: 'Private' },
-                  ]} />
-                {privacy.collectionPrivacy === 'password' && (
-                  <PasswordInput placeholder="Set a password for your collection" value={colPassword}
-                    onChange={e => setColPassword(e.currentTarget.value)} size="sm" />
-                )}
-              </Box>
-              <Box>
-                <Text size="sm" fw={600} mb={6}>Wantlist</Text>
-                <SegmentedControl fullWidth mb="sm"
-                  value={privacy.wantlistPrivacy}
-                  onChange={v => setPrivacy(p => ({ ...p, wantlistPrivacy: v }))}
-                  data={[
-                    { value: 'public', label: 'Public' },
-                    { value: 'password', label: 'Password' },
-                    { value: 'private', label: 'Private' },
-                  ]} />
-                {privacy.wantlistPrivacy === 'password' && (
-                  <PasswordInput placeholder="Set a password for your wantlist" value={wantPassword}
-                    onChange={e => setWantPassword(e.currentTarget.value)} size="sm" />
-                )}
-              </Box>
-            </SimpleGrid>
+          {privacyLoading ? (
+            <Group justify="center" py="lg"><Loader size="sm" /></Group>
+          ) : (
+            <>
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="lg" mb="xl">
+                <Box>
+                  <Text size="sm" fw={600} mb={6}>Collection</Text>
+                  <SegmentedControl fullWidth mb="sm"
+                    value={privacy.collectionPrivacy}
+                    onChange={v => setPrivacy(p => ({ ...p, collectionPrivacy: v }))}
+                    data={[
+                      { value: 'public', label: 'Public' },
+                      { value: 'password', label: 'Password' },
+                      { value: 'private', label: 'Private' },
+                    ]} />
+                  {privacy.collectionPrivacy === 'password' && (
+                    <PasswordInput placeholder="Set a password for your collection" value={colPassword}
+                      onChange={e => setColPassword(e.currentTarget.value)} size="sm" />
+                  )}
+                </Box>
+                <Box>
+                  <Text size="sm" fw={600} mb={6}>Wantlist</Text>
+                  <SegmentedControl fullWidth mb="sm"
+                    value={privacy.wantlistPrivacy}
+                    onChange={v => setPrivacy(p => ({ ...p, wantlistPrivacy: v }))}
+                    data={[
+                      { value: 'public', label: 'Public' },
+                      { value: 'password', label: 'Password' },
+                      { value: 'private', label: 'Private' },
+                    ]} />
+                  {privacy.wantlistPrivacy === 'password' && (
+                    <PasswordInput placeholder="Set a password for your wantlist" value={wantPassword}
+                      onChange={e => setWantPassword(e.currentTarget.value)} size="sm" />
+                  )}
+                </Box>
+              </SimpleGrid>
 
-            <Divider mb="lg" />
+              <Divider mb="lg" />
 
-            <Text size="sm" fw={600} mb={4}>Your share link</Text>
-            <Text size="xs" c="dimmed" mb="sm">
-              Share this link with friends. It reveals only what you've made public.
-            </Text>
-            {shareLink ? (
-              <Group gap="sm" align="center" wrap="nowrap">
-                <Code style={{ flex: 1, wordBreak: 'break-all' }}>{shareLink}</Code>
-                <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />} onClick={copyShare}>Copy</Button>
-              </Group>
-            ) : (
-              <Text size="xs" c="dimmed">Set Collection or Wantlist to Public or Password to generate a share link.</Text>
-            )}
-          </>
-        )}
-      </Paper>
+              <Text size="sm" fw={600} mb={4}>Your share link</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Share this link with friends. It reveals only what you've made public.
+              </Text>
+              {shareLink ? (
+                <Group gap="sm" align="center" wrap="nowrap">
+                  <Code style={{ flex: 1, wordBreak: 'break-all' }}>{shareLink}</Code>
+                  <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />} onClick={copyShare}>Copy</Button>
+                </Group>
+              ) : (
+                <Text size="xs" c="dimmed">Set Collection or Wantlist to Public or Password to generate a share link.</Text>
+              )}
+            </>
+          )}
+        </Paper>
+      )}
     </Stack>
   );
 }

@@ -95,6 +95,7 @@ export interface CollectionItem {
   locationId: number;
   destinationId: number | null;
   foil: number;
+  foreignLanguage?: number;
   condition: string | null;
   quantity: number;
   purchasePrice: number | null;

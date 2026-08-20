@@ -29,7 +29,7 @@ import { shareRouter, profilePrivacyRouter } from './routes/share';
 import { initScheduler, getSchedulerStatus } from './scheduler';
 import { logActivity } from './services/activityLog';
 import { getSystemSettings } from './services/systemSettings';
-import { isInstanceSetupDone } from './services/setupStatus';
+import { isInstanceSetupDone, ensureSetupToken } from './services/setupStatus';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -57,6 +57,26 @@ app.use(cors({
   },
   credentials: true,
 }));
+
+// Defense-in-depth CSRF guard on top of SameSite=strict cookies: reject
+// state-changing requests whose Origin is neither same-origin nor explicitly
+// allowed. Browsers always send an Origin header on cross-origin POST/PUT/PATCH/DELETE,
+// so this blocks cross-site drives to the API even if the cookie were sent.
+const MUTATING = ['POST', 'PUT', 'PATCH', 'DELETE'];
+const isLocalhost = (h: string) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(h);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && MUTATING.includes(req.method.toUpperCase())) {
+    const originHost = origin.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+    const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
+    const allowed = allowedOrigin.includes(origin);
+    // Allow same-origin, the dev proxy (localhost client), or explicitly configured origins.
+    if (!sameOrigin && !allowed && !isLocalhost(originHost)) {
+      return res.status(403).json({ error: 'Cross-origin request rejected' });
+    }
+  }
+  next();
+});
 app.use(express.json({ limit: '50mb' }));
 
 app.use((req, res, next) => {
@@ -141,6 +161,17 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 
 initDb();
 bootstrapAdmin();
+if (!isInstanceSetupDone()) {
+  const setupToken = ensureSetupToken();
+  console.log(
+    '========================================================================\n' +
+    '  First-time setup is pending.\n' +
+    `  Use this ONE-TIME setup token on the landing page to begin setup:\n` +
+    `    ${setupToken}\n` +
+    '  (Only accepted before the instance setup is completed.)\n' +
+    '========================================================================'
+  );
+}
 initScheduler().then(() => {
   console.log('Startup sync check complete');
 });

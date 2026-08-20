@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { api } from '../api/client';
-import { prefetchCardImage, resolveGhostImages, cacheGhostImagesByName } from './CardDisplay';
+import { prefetchCardImage, resolveGhostImages, cacheGhostImagesByName, ghostImageCached, markGhostIdRequested, ghostIdRequested } from './CardDisplay';
 import type { CardImageData } from './CardDisplay';
 
 export function cardLargeUrls(card?: CardImageData | null): string[] {
@@ -18,7 +18,7 @@ export function cardLargeUrls(card?: CardImageData | null): string[] {
   return urls;
 }
 
-function cardSmallUrls(card?: CardImageData | null): string[] {
+export function cardSmallUrls(card?: CardImageData | null): string[] {
   if (!card) return [];
   const urls: string[] = [];
   const push = (u?: string | null) => {
@@ -53,7 +53,7 @@ export function CardPrefetch({ cards, ghosts }: {
         .filter((g): g is { cardId: string | null; cardName: string } => !!g && !g.cardId)
         .map(g => g.cardName)
         .filter(Boolean),
-    ));
+    )).filter(name => !ghostImageCached(name, null));
 
     if (genericNames.length > 0) {
       api.cards.byNames(genericNames)
@@ -66,6 +66,9 @@ export function CardPrefetch({ cards, ghosts }: {
 
     for (const ghost of ghosts) {
       if (!ghost || !ghost.cardId) continue;
+      if (ghostImageCached(ghost.cardName, ghost.cardId)) continue;
+      if (ghostIdRequested(ghost.cardId)) continue;
+      markGhostIdRequested(ghost.cardId);
       resolveGhostImages(ghost.cardName, ghost.cardId).then(img => {
         if (img?.small) prefetchCardImage(img.small);
         if (img?.large) prefetchCardImage(img.large);

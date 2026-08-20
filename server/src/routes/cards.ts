@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { catalogDb, schema, sqlite } from '../db';
 import { like, or, and, sql, eq, asc, desc, notInArray } from 'drizzle-orm';
-import { localImageUris, localizeCardFaces } from '../services/cards';
+import { localImageUris, localizeCardFaces, latestCardByNames } from '../services/cards';
 
 export const cardsRouter = Router();
 
@@ -196,28 +196,7 @@ cardsRouter.get('/by-names', (req, res) => {
   if (names.length === 0) {
     return res.json({});
   }
-  const exact = names.map(n => sql`lower(${schema.scryfallCards.name}) = ${n.toLowerCase().replace(/([%_])/g, '\\$1')}`);
-  const like = names.map(n => sql`lower(${schema.scryfallCards.name}) LIKE ${n.toLowerCase().replace(/([%_])/g, '\\$1') + ' // %'} ESCAPE '\\'`);
-  const rows = catalogDb.select(cardFields)
-    .from(schema.scryfallCards)
-    .where(and(
-      NOT_ARENA,
-      notInArray(schema.scryfallCards.layout, NON_CARD_LAYOUTS),
-      or(...exact, ...like),
-    ))
-    .orderBy(desc(schema.scryfallCards.releasedAt))
-    .all();
-
-  // Keep, per input name, the most recent matching printing.
-  const byName = new Map<string, any>();
-  for (const r of rows) {
-    // Match each card to the input name it corresponds to (exact name or DFC prefix).
-    const lowerName = r.name.toLowerCase();
-    const hit = names.find(nn => lowerName === nn.toLowerCase() || lowerName.startsWith(nn.toLowerCase() + ' // '));
-    if (hit && !byName.has(hit)) {
-      byName.set(hit, r);
-    }
-  }
+  const byName = latestCardByNames(names);
   const result: Record<string, any> = {};
   for (const n of names) {
     const card = byName.get(n);
@@ -402,7 +381,9 @@ cardsRouter.get('/grouped', (req, res) => {
     FROM ranked r
     JOIN stats s ON s.name = r.name
     WHERE r.rn = 1
-    ORDER BY r.name
+    ORDER BY
+      CASE WHEN lower(replace(r.name, '''', '')) = lower(${q.replace(/'/g, '')}) THEN 0 ELSE 1 END,
+      r.name
     LIMIT ${pageSize}
     OFFSET ${offset}
   `);

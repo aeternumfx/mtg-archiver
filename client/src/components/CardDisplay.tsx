@@ -3,7 +3,6 @@ import { Group, Text, Image, Badge, HoverCard, Box } from '@mantine/core';
 import { api } from '../api/client';
 
 const FALLBACK_32 = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='45'%3E%3Crect fill='%23e0e0e0' width='32' height='45'/%3E%3C/svg%3E";
-const FALLBACK_240 = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='335'%3E%3Crect fill='%23e0e0e0' width='240' height='335'/%3E%3C/svg%3E";
 
 export interface CardImageData {
   imageUris?: Record<string, string> | null;
@@ -29,6 +28,36 @@ const DOUBLE_FACED_LAYOUTS = new Set([
 
 function isDoubleFaced(card: CardImageData): boolean {
   return DOUBLE_FACED_LAYOUTS.has(card.layout ?? '');
+}
+
+// Hover-preview image that paints the thumbnail resolution instantly and fades
+// in the full-size image once it's loaded (usually from the browser cache).
+export function ProgressiveImage({ src, placeholder, width, height, fit = 'contain' }: {
+  src?: string | null;
+  placeholder?: string | null;
+  width: number;
+  height: number;
+  fit?: 'contain' | 'cover';
+}) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div style={{ position: 'relative', width, height, overflow: 'hidden', borderRadius: 8, background: '#1a1a2e', flexShrink: 0 }}>
+      {placeholder && (
+        <img src={placeholder} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit }} />
+      )}
+      {src && (
+        <img
+          src={src}
+          alt=""
+          onLoad={() => setLoaded(true)}
+          style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: fit,
+            opacity: loaded ? 1 : 0, transition: 'opacity 150ms ease',
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 const FOIL_OVERLAY =
@@ -82,13 +111,12 @@ export function CardThumb({ card, foil }: { card: CardImageData; foil?: boolean 
       {showFaces ? (
         <Group gap={4} wrap="nowrap">
           {faceImages.map((fi, i) => (
-            <Image key={i} src={fi.large || fi.small} w={240} h={335}
-              fit={(card.layout ?? '') === 'art_series' ? 'cover' : 'contain'}
-              radius="sm" fallbackSrc={FALLBACK_240} />
+            <ProgressiveImage key={i} src={fi.large} placeholder={fi.small} width={240} height={335}
+              fit={(card.layout ?? '') === 'art_series' ? 'cover' : 'contain'} />
           ))}
         </Group>
       ) : (
-        <Image src={srcLarge || srcSmall} w={320} h={448} fit="contain" radius="sm" />
+        <ProgressiveImage src={srcLarge} placeholder={srcSmall} width={320} height={448} fit="contain" />
       )}
       {foil && <FoilOverlay />}
     </div>
@@ -104,7 +132,46 @@ export function CardThumb({ card, foil }: { card: CardImageData; foil?: boolean 
   );
 }
 
+const GHOST_CACHE_KEY = 'mtg-ghost-image-cache-v1';
+
 const ghostCache = new Map<string, { small: string | null; large: string | null } | null>();
+
+// Hydrate the in-memory ghost cache from sessionStorage so resolving generic
+// card art (a server/name lookup) survives navigating away and back / page
+// reloads within the same tab. The actual images themselves are also served
+// from the browser HTTP cache, so this only avoids re-running the lookup.
+try {
+  const raw = sessionStorage.getItem(GHOST_CACHE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw) as Record<string, { small: string | null; large: string | null } | null>;
+    for (const [k, v] of Object.entries(parsed)) ghostCache.set(k, v);
+  }
+} catch { /* ignore */ }
+
+function persistGhostCache() {
+  try { sessionStorage.setItem(GHOST_CACHE_KEY, JSON.stringify(Object.fromEntries(ghostCache))); } catch { /* ignore */ }
+}
+
+function ghostCacheSet(key: string, value: { small: string | null; large: string | null } | null) {
+  ghostCache.set(key, value);
+  persistGhostCache();
+}
+
+// Tracks card ids we've already requested individually so repeat lookups during
+// the same session don't fire redundant network calls (e.g. 20 Island ghosts).
+const ghostRequestedIds = new Set<string>();
+// Tracks which generic names are already resolved/cached for GhostThumb.
+export function ghostImageCached(name?: string | null, cardId?: string | null): boolean {
+  const key = cardId ? `id:${cardId}` : (name ? `name:${name.toLowerCase()}` : null);
+  if (!key) return true;
+  return ghostCache.has(key);
+}
+export function markGhostIdRequested(cardId: string) {
+  ghostRequestedIds.add(cardId);
+}
+export function ghostIdRequested(cardId: string): boolean {
+  return ghostRequestedIds.has(cardId);
+}
 
 function ghostImageFrom(card: any): { small: string | null; large: string | null } | null {
   const uris = card?.imageUris;
@@ -136,7 +203,7 @@ export function resolveGhostImages(
     ? api.cards.get(cardId).then(c => ghostImageFrom(c)).catch(() => null)
     : api.cards.byName(name || '').then(c => ghostImageFrom(c)).catch(() => null);
   return loader.then(img => {
-    ghostCache.set(key, img);
+    ghostCacheSet(key, img);
     return img;
   });
 }
@@ -147,7 +214,7 @@ export function cacheGhostImagesByName(cards: Record<string, any>): string[] {
   const urls: string[] = [];
   for (const [name, card] of Object.entries(cards)) {
     const img = ghostImageFrom(card);
-    ghostCache.set(`name:${name.toLowerCase()}`, img);
+    ghostCacheSet(`name:${name.toLowerCase()}`, img);
     if (img?.small) urls.push(img.small);
     if (img?.large) urls.push(img.large);
   }
@@ -224,7 +291,7 @@ export function GhostThumb({ name, cardId, card }: {
       </HoverCard.Target>
       <HoverCard.Dropdown p={0} style={{ border: 'none', background: 'transparent', pointerEvents: 'none' }}>
         <div style={{ position: 'relative', display: 'inline-block' }}>
-          <Image src={srcLarge} w={320} h={448} fit="contain" radius="sm" />
+          <ProgressiveImage src={srcLarge} placeholder={srcSmall} width={320} height={448} fit="contain" />
           <Box style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(15,15,25,0.3)' }}>
             <Text c="white" fw={700} style={{ fontSize: 120, textShadow: '0 3px 8px rgba(0,0,0,0.9)', lineHeight: 1, opacity: 0.9 }}>?</Text>
           </Box>
@@ -278,12 +345,13 @@ export function Tags({ card }: { card: Record<string, any> }) {
   );
 }
 
-export function CopyTags({ item }: { item: { proxy?: number | boolean | null; misprint?: number | boolean | null; altered?: number | boolean | null } }) {
+export function CopyTags({ item }: { item: { proxy?: number | boolean | null; misprint?: number | boolean | null; altered?: number | boolean | null; foreignLanguage?: number | boolean | null } }) {
   return (
     <Group gap={4}>
       {item.proxy ? <Badge size="xs" color="orange" variant="light">PROXY</Badge> : null}
       {item.misprint ? <Badge size="xs" color="red" variant="light">MISPRINT</Badge> : null}
       {item.altered ? <Badge size="xs" color="grape" variant="light">ALTERED</Badge> : null}
+      {item.foreignLanguage ? <Badge size="xs" color="teal" variant="light">FOREIGN</Badge> : null}
     </Group>
   );
 }

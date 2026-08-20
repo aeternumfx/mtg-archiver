@@ -1,7 +1,7 @@
 import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema, catalogSqlite } from '../db';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { cardById, cardsByIds, parseCardJson } from '../services/cards';
 import { parseDecklist, type DeckImportEntry } from '../services/decklistParser';
 
@@ -218,14 +218,29 @@ decksRouter.post('/import', (req, res) => {
 
 decksRouter.get('/', (_req, res) => {
   const allDecks = db.select().from(schema.decks).orderBy(schema.decks.name).all();
-  const result = allDecks.map(d => {
-    const count = db.select().from(schema.collectionItems)
-      .where(eq(schema.collectionItems.deckId, d.id))
-      .all()
-      .reduce((s, i) => s + i.quantity, 0);
-    const loc = getDeckLocation(d.id);
-    return { ...d, cardCount: count, locationId: loc?.id ?? null };
-  });
+  if (allDecks.length === 0) return res.json([]);
+  const deckIds = allDecks.map(d => d.id);
+
+  const countRows = db.select({
+    deckId: schema.collectionItems.deckId,
+    qty: sql<number>`SUM(${schema.collectionItems.quantity})`,
+  })
+    .from(schema.collectionItems)
+    .where(inArray(schema.collectionItems.deckId, deckIds))
+    .groupBy(schema.collectionItems.deckId)
+    .all() as Array<{ deckId: number; qty: number }>;
+  const countByDeck = new Map(countRows.map(r => [r.deckId, r.qty]));
+
+  const locRows = db.select().from(schema.locations)
+    .where(inArray(schema.locations.deckId, deckIds))
+    .all();
+  const locByDeck = new Map(locRows.map(l => [l.deckId, l.id]));
+
+  const result = allDecks.map(d => ({
+    ...d,
+    cardCount: countByDeck.get(d.id) ?? 0,
+    locationId: locByDeck.get(d.id) ?? null,
+  }));
   res.json(result);
 });
 
@@ -372,6 +387,7 @@ decksRouter.get('/:id/cards', (req, res) => {
     locationId: schema.collectionItems.locationId,
     destinationId: schema.collectionItems.destinationId,
     foil: schema.collectionItems.foil,
+    foreignLanguage: schema.collectionItems.foreignLanguage,
     condition: schema.collectionItems.condition,
     quantity: schema.collectionItems.quantity,
     purchasePrice: schema.collectionItems.purchasePrice,
@@ -483,15 +499,25 @@ decksRouter.get('/:id/required', (req, res) => {
     .orderBy(schema.deckRequiredCards.createdAt)
     .all();
 
+  const fillIds = rows.map(r => r.fillItemId).filter((x): x is number => x != null);
+  const fillMap = new Map<number, string>();
+  if (fillIds.length > 0) {
+    const chunks: number[][] = [];
+    for (let i = 0; i < fillIds.length; i += 500) chunks.push(fillIds.slice(i, i + 500));
+    for (const ch of chunks) {
+      const placeholders = ch.map(() => '?').join(',');
+      const locRows = sqlite.prepare(`
+        SELECT ci.id, l.name FROM collection_items ci
+        JOIN locations l ON l.id = ci.location_id
+        WHERE ci.id IN (${placeholders})
+      `).all(...ch) as Array<{ id: number; name: string }>;
+      for (const l of locRows) fillMap.set(l.id, l.name);
+    }
+  }
+
   const cards = rows.map(r => ({
     ...r,
-    fillSourceName: r.fillItemId
-      ? (sqlite.prepare(`
-          SELECT l.name FROM collection_items ci
-          JOIN locations l ON l.id = ci.location_id
-          WHERE ci.id = ?
-        `).get(r.fillItemId) as { name: string } | undefined)?.name ?? null
-      : null,
+    fillSourceName: r.fillItemId ? (fillMap.get(r.fillItemId) ?? null) : null,
   }));
   res.json(cards);
 });
@@ -667,138 +693,218 @@ decksRouter.post('/:id/required/:reqId/move', (req, res) => {
   }
 });
 
+const httpError = (status: number, message: string) => {
+  const err = new Error(message) as Error & { status: number };
+  err.status = status;
+  return err;
+};
+
+// Fill a ghost card with a real copy. Defaults to filling the full required
+// quantity with autofilled market pricing. When `opts.allowGeneric === false`,
+// ghosts that do not pin a specific printing (no cardId / set+collector number)
+// are rejected — the caller must resolve a printing itself (see bulk fill).
+function fillGhostExternal(deckId: number, reqId: number, opts: {
+  chosenCardId?: string | null;
+  foil?: boolean;
+  condition?: string | null;
+  quantity?: number | null;
+  purchasePrice?: string | number | null;
+  packOpened?: boolean;
+  notes?: string | null;
+  locationId?: number | null;
+  destinationId?: number | null;
+  allowGeneric?: boolean;
+} = {}) {
+  const {
+    chosenCardId, foil, condition, quantity,
+    purchasePrice, packOpened, notes, locationId, destinationId,
+    allowGeneric = true,
+  } = opts;
+
+  const ghost = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
+  if (!ghost || ghost.deckId !== deckId) throw httpError(404, 'Ghost card not found');
+  const deckLoc = getDeckLocation(deckId);
+  if (!deckLoc) throw httpError(400, 'Deck has no location');
+  const loc = locationId == null ? deckLoc : (
+    db.select().from(schema.locations).where(eq(schema.locations.id, Number(locationId))).get() ?? null
+  );
+  if (!loc) throw httpError(400, 'Location not found');
+
+  // Bulk fills must be specific printings — a generic "any printing" ghost has no
+  // way to pick a printing without the manual flow.
+  if (!allowGeneric && !ghost.cardId && !(ghost.setCode && ghost.collectorNumber)) {
+    throw httpError(400, `Cannot bulk-fill "${ghost.cardName}": generic (any printing) ghosts are not supported. Fill it individually to pick a printing.`);
+  }
+
+  // Validate an optional scheduled-move destination.
+  let resolvedDest: number | null = null;
+  if (destinationId !== undefined && destinationId !== null) {
+    const dest = db.select().from(schema.locations).where(eq(schema.locations.id, Number(destinationId))).get();
+    if (!dest) throw httpError(400, 'Destination location not found');
+    resolvedDest = dest.id;
+  }
+
+  let cardId = chosenCardId || ghost.cardId || null;
+  if (!cardId) {
+    const resolved = (ghost.setCode && ghost.collectorNumber)
+      ? resolvePrinting(ghost.cardName, ghost.setCode, ghost.collectorNumber)
+      : null;
+    cardId = resolved?.cardId ?? resolveByName(ghost.cardName)?.cardId ?? null;
+  }
+  if (!cardId) throw httpError(400, `Could not resolve "${ghost.cardName}" to a card`);
+  const card = cardById(cardId);
+  if (!card) throw httpError(400, 'Selected printing not found');
+
+  const rawQty = Math.floor(Number(quantity));
+  const qty = Number.isFinite(rawQty) && rawQty > 0
+    ? Math.min(rawQty, ghost.quantity || 1, 999)
+    : Math.min(ghost.quantity || 1, 999);
+
+  // Price: use the supplied value, otherwise autofill the market value of the chosen printing.
+  let price: number | null = null;
+  let autofilled = 0;
+  if (purchasePrice !== undefined && purchasePrice !== null && purchasePrice !== '') {
+    const parsed = parseFloat(String(purchasePrice));
+    if (!isNaN(parsed)) {
+      price = parsed;
+    }
+  }
+  if (price === null) {
+    let cardPrices: Record<string, any> = {};
+    try { cardPrices = JSON.parse(card.prices ?? '{}'); } catch { cardPrices = {}; }
+    const usd = foil ? (cardPrices.usd_foil ?? cardPrices.usd) : (cardPrices.usd ?? cardPrices.usd_foil);
+    if (usd) {
+      price = parseFloat(usd);
+      autofilled = 1;
+    }
+  }
+
+  // Cancel any pending scheduled move that was filling this ghost.
+  if (ghost.fillItemId) {
+    db.update(schema.collectionItems)
+      .set({ destinationId: null })
+      .where(eq(schema.collectionItems.id, ghost.fillItemId))
+      .run();
+  }
+
+  const item = db.insert(schema.collectionItems)
+    .values({
+      cardId,
+      locationId: loc.id,
+      deckId,
+      destinationId: resolvedDest,
+      foil: foil ? 1 : 0,
+      condition: condition ?? null,
+      quantity: qty,
+      purchasePrice: price,
+      priceAutofilled: autofilled,
+      packOpened: packOpened ? 1 : 0,
+      notes: notes ?? null,
+    })
+    .returning().get() as { id: number; quantity: number };
+
+  // If this ghost filled a command-zone slot, bind that slot to the new copy.
+  const deck = db.select().from(schema.decks).where(eq(schema.decks.id, deckId)).get();
+  if (deck) {
+    const updates: Record<string, any> = {};
+    if (deck.commanderCardId === cardId) updates.commanderItemId = item.id;
+    if (deck.partnerCardId === cardId) updates.partnerItemId = item.id;
+    if (deck.backgroundCardId === cardId) updates.backgroundItemId = item.id;
+    if (Object.keys(updates).length > 0) {
+      db.update(schema.decks).set(updates).where(eq(schema.decks.id, deckId)).run();
+    }
+  }
+
+  // If we filled fewer than the required amount, keep the remaining difference
+  // as a ghost so the deck still wants the rest (e.g. 10 islands -> fill 1 -> 9 required).
+  const filled = Math.min(qty, ghost.quantity);
+  const remaining = ghost.quantity - filled;
+  const wl = findGhostWantlist(ghost.id, ghost.cardName);
+
+  if (remaining > 0) {
+    db.update(schema.deckRequiredCards)
+      .set({ quantity: remaining })
+      .where(eq(schema.deckRequiredCards.id, ghost.id))
+      .run();
+    if (wl) {
+      db.update(schema.wantlistItems)
+        .set({ quantity: remaining })
+        .where(eq(schema.wantlistItems.id, wl.id))
+        .run();
+    }
+  } else {
+    if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
+    db.delete(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, ghost.id)).run();
+  }
+
+  return {
+    item,
+    remainingGhost: remaining > 0 ? { ...ghost, quantity: remaining } : null,
+  };
+}
+
 decksRouter.post('/:id/required/:reqId/fill-external', (req, res) => {
   const deckId = Number(req.params.id);
   const reqId = Number(req.params.reqId);
-  const {
-    cardId: chosenCardId, foil, condition, quantity,
-    purchasePrice, packOpened, notes, locationId, destinationId,
-  } = req.body || {};
+  const body = req.body || {};
+  try {
+    const result = sqlite.transaction(() => fillGhostExternal(deckId, reqId, {
+      chosenCardId: body.cardId,
+      foil: body.foil,
+      condition: body.condition,
+      quantity: body.quantity,
+      purchasePrice: body.purchasePrice,
+      packOpened: body.packOpened,
+      notes: body.notes,
+      locationId: body.locationId,
+      destinationId: body.destinationId,
+    }));
+    res.status(201).json(result);
+  } catch (err: any) {
+    fail(res, err, typeof err?.status === 'number' ? err.status : 500);
+  }
+});
 
-  const httpError = (status: number, message: string) => {
-    const err = new Error(message) as Error & { status: number };
-    err.status = status;
-    return err;
-  };
+// Bulk-fill multiple required cards at once. Each ghost must be a specific
+// printing; cards are added with default (NM) condition, full quantity, autofill
+// pricing, and the deck's location.
+decksRouter.post('/:id/required/fill-external-bulk', (req, res) => {
+  const deckId = Number(req.params.id);
+  const raw = req.body?.reqIds;
+  const reqIds = Array.isArray(raw) ? raw.map((n: any) => Number(n)).filter((n: number) => Number.isInteger(n)) : [];
+  if (reqIds.length === 0) return res.status(400).json({ error: 'No required cards provided' });
 
   try {
-    const result = sqlite.transaction(() => {
-      const ghost = db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, reqId)).get();
-      if (!ghost || ghost.deckId !== deckId) throw httpError(404, 'Ghost card not found');
-      const deckLoc = getDeckLocation(deckId);
-      if (!deckLoc) throw httpError(400, 'Deck has no location');
-      const loc = locationId == null ? deckLoc : (
-        db.select().from(schema.locations).where(eq(schema.locations.id, Number(locationId))).get() ?? null
-      );
-      if (!loc) throw httpError(400, 'Location not found');
+    // Validate the whole batch up front so a bad request doesn't partially fill.
+    const ghosts = reqIds.map(id => db.select().from(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, id)).get());
+    const invalid = ghosts.filter(g => !g || g.deckId !== deckId);
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: 'One or more required cards were not found in this deck' });
+    }
+    const generic = ghosts.filter((g: any) => !g.cardId && !(g.setCode && g.collectorNumber));
+    if (generic.length > 0) {
+      const names = generic.map((g: any) => `"${g.cardName}"`).join(', ');
+      return res.status(400).json({
+        error: `Bulk filling is only supported for specific printings. ${names} ${generic.length > 1 ? 'are' : 'is'} generic (any printing). Fill it individually to pick a printing.`,
+      });
+    }
 
-      // Validate an optional scheduled-move destination.
-      let resolvedDest: number | null = null;
-      if (destinationId !== undefined && destinationId !== null) {
-        const dest = db.select().from(schema.locations).where(eq(schema.locations.id, Number(destinationId))).get();
-        if (!dest) throw httpError(400, 'Destination location not found');
-        resolvedDest = dest.id;
-      }
-
-      let cardId = chosenCardId || ghost.cardId || null;
-      if (!cardId) {
-        const resolved = (ghost.setCode && ghost.collectorNumber)
-          ? resolvePrinting(ghost.cardName, ghost.setCode, ghost.collectorNumber)
-          : null;
-        cardId = resolved?.cardId ?? resolveByName(ghost.cardName)?.cardId ?? null;
-      }
-      if (!cardId) throw httpError(400, `Could not resolve "${ghost.cardName}" to a card`);
-      const card = cardById(cardId);
-      if (!card) throw httpError(400, 'Selected printing not found');
-
-      const rawQty = Math.floor(Number(quantity));
-      const qty = Number.isFinite(rawQty) && rawQty > 0
-        ? Math.min(rawQty, ghost.quantity || 1, 999)
-        : Math.min(ghost.quantity || 1, 999);
-
-      // Price: use the supplied value, otherwise autofill the market value of the chosen printing.
-      let price: number | null = null;
-      let autofilled = 0;
-      if (purchasePrice !== undefined && purchasePrice !== null && purchasePrice !== '') {
-        const parsed = parseFloat(String(purchasePrice));
-        if (!isNaN(parsed)) {
-          price = parsed;
-        }
-      }
-      if (price === null) {
-        let cardPrices: Record<string, any> = {};
-        try { cardPrices = JSON.parse(card.prices ?? '{}'); } catch { cardPrices = {}; }
-        const usd = foil ? (cardPrices.usd_foil ?? cardPrices.usd) : (cardPrices.usd ?? cardPrices.usd_foil);
-        if (usd) {
-          price = parseFloat(usd);
-          autofilled = 1;
-        }
-      }
-
-      // Cancel any pending scheduled move that was filling this ghost.
-      if (ghost.fillItemId) {
-        db.update(schema.collectionItems)
-          .set({ destinationId: null })
-          .where(eq(schema.collectionItems.id, ghost.fillItemId))
-          .run();
-      }
-
-      const item = db.insert(schema.collectionItems)
-        .values({
-          cardId,
-          locationId: loc.id,
-          deckId,
-          destinationId: resolvedDest,
-          foil: foil ? 1 : 0,
-          condition: condition ?? null,
-          quantity: qty,
-          purchasePrice: price,
-          priceAutofilled: autofilled,
-          packOpened: packOpened ? 1 : 0,
-          notes: notes ?? null,
-        })
-        .returning().get() as { id: number };
-
-      // If this ghost filled a command-zone slot, bind that slot to the new copy.
-      const deck = db.select().from(schema.decks).where(eq(schema.decks.id, deckId)).get();
-      if (deck) {
-        const updates: Record<string, any> = {};
-        if (deck.commanderCardId === cardId) updates.commanderItemId = item.id;
-        if (deck.partnerCardId === cardId) updates.partnerItemId = item.id;
-        if (deck.backgroundCardId === cardId) updates.backgroundItemId = item.id;
-        if (Object.keys(updates).length > 0) {
-          db.update(schema.decks).set(updates).where(eq(schema.decks.id, deckId)).run();
-        }
-      }
-
-      // If we filled fewer than the required amount, keep the remaining difference
-      // as a ghost so the deck still wants the rest (e.g. 10 islands -> fill 1 -> 9 required).
-      const filled = Math.min(qty, ghost.quantity);
-      const remaining = ghost.quantity - filled;
-      const wl = findGhostWantlist(ghost.id, ghost.cardName);
-
-      if (remaining > 0) {
-        db.update(schema.deckRequiredCards)
-          .set({ quantity: remaining })
-          .where(eq(schema.deckRequiredCards.id, ghost.id))
-          .run();
-        if (wl) {
-          db.update(schema.wantlistItems)
-            .set({ quantity: remaining })
-            .where(eq(schema.wantlistItems.id, wl.id))
-            .run();
-        }
-      } else {
-        if (wl) db.delete(schema.wantlistItems).where(eq(schema.wantlistItems.id, wl.id)).run();
-        db.delete(schema.deckRequiredCards).where(eq(schema.deckRequiredCards.id, ghost.id)).run();
-      }
-
-      return {
-        item,
-        remainingGhost: remaining > 0 ? { ...ghost, quantity: remaining } : null,
-      };
-    })();
-    res.status(201).json(result);
+    const results = sqlite.transaction(() =>
+      reqIds.map(id => fillGhostExternal(deckId, id, { condition: 'NM', allowGeneric: false }))
+    )();
+    res.status(201).json({
+      results: reqIds.map((id, i) => {
+        const r = results[i];
+        const g = ghosts[i]!;
+        return {
+          reqId: id,
+          itemId: r.item.id,
+          quantity: r.item.quantity,
+          remainingGhost: r.remainingGhost,
+          ghost: { cardId: g.cardId, cardName: g.cardName, setCode: g.setCode, collectorNumber: g.collectorNumber, quantity: g.quantity },
+        };
+      }),
+    });
   } catch (err: any) {
     fail(res, err, typeof err?.status === 'number' ? err.status : 500);
   }

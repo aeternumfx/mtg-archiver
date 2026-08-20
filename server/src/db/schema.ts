@@ -90,6 +90,7 @@ export const collectionItems = sqliteTable('collection_items', {
   destinationId: integer('destination_id').references(() => locations.id),
   deckId: integer('deck_id').references(() => decks.id),
   foil: integer('foil').notNull().default(0),
+  foreignLanguage: integer('foreign_language').notNull().default(0),
   condition: text('condition'),
   quantity: integer('quantity').notNull().default(1),
   purchasePrice: real('purchase_price'),

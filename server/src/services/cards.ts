@@ -44,16 +44,60 @@ export function cardById(id: string): CatalogCardRow | undefined {
   return catalogSqlite.prepare(`SELECT ${CATALOG_SELECT} FROM scryfall_cards WHERE id = ?`).get(id) as CatalogCardRow | undefined;
 }
 
+const NON_PLAYABLE_LAYOUTS = [
+  'art_series', 'token', 'double_faced_token', 'emblem', 'scheme',
+  'planar', 'vanguard', 'augment', 'host',
+];
+
+// Static SQL fragments reused by the name-resolution queries below.
+const NON_PLAYABLE_SQL = `layout NOT IN (${NON_PLAYABLE_LAYOUTS.map(() => '?').join(',')})`;
+const NON_ARENA_SQL = `set_code NOT LIKE 'y%' AND set_code != 'hbg' AND collector_number NOT LIKE 'A-%'`;
+
+/**
+ * Resolves many card names to the most recent real, playable printing of each,
+ * using index-friendly per-name queries (a single big OR would force a full
+ * table scan and be orders of magnitude slower). Handles double-faced cards
+ * requested by their short face name ("A // B" matched via "A").
+ */
+export function latestCardByNames(names: string[]): Map<string, CatalogCardRow> {
+  const result = new Map<string, CatalogCardRow>();
+  const uniq = Array.from(new Set(
+    names.map(n => n.trim()).filter(Boolean).slice(0, 200),
+  )) as string[];
+  if (uniq.length === 0) return result;
+
+  const layoutParams = NON_PLAYABLE_LAYOUTS;
+  const exact = catalogSqlite.prepare(
+    `SELECT ${CATALOG_SELECT} FROM scryfall_cards
+     WHERE name = ? COLLATE NOCASE AND ${NON_PLAYABLE_SQL} AND ${NON_ARENA_SQL}
+     ORDER BY released_at DESC LIMIT 1`,
+  );
+  const prefix = catalogSqlite.prepare(
+    `${`SELECT ${CATALOG_SELECT} FROM scryfall_cards
+     WHERE name LIKE ? ESCAPE '\\' AND ${NON_PLAYABLE_SQL} AND ${NON_ARENA_SQL}
+     ORDER BY released_at DESC LIMIT 1`}`,
+  );
+
+  for (const name of uniq) {
+    const low = name.toLowerCase();
+    const byExact = exact.get(low, ...layoutParams) as CatalogCardRow | undefined;
+    if (byExact) {
+      result.set(name, byExact);
+      continue;
+    }
+    // Double-faced cards: the short face name won't match exactly, so check the
+    // "A // B" prefix form.
+    const byPrefix = prefix.get(low + ' // %', ...layoutParams) as CatalogCardRow | undefined;
+    if (byPrefix) result.set(name, byPrefix);
+  }
+  return result;
+}
+
 export function cardsByName(name: string): CatalogCardRow[] {
   return catalogSqlite.prepare(
     `SELECT ${CATALOG_SELECT} FROM scryfall_cards WHERE name = ? ORDER BY released_at DESC`
   ).all(name) as CatalogCardRow[];
 }
-
-const NON_PLAYABLE_LAYOUTS = [
-  'art_series', 'token', 'double_faced_token', 'emblem', 'scheme',
-  'planar', 'vanguard', 'augment', 'host',
-];
 
 function usdPrice(c: CatalogCardRow): number | null {
   if (!c.prices) return null;
@@ -108,77 +152,57 @@ export function cheapestByNames(names: string[]): Map<string, { card: CatalogCar
   }
   if (missing.length === 0) return result;
 
-  const layoutPh = NON_PLAYABLE_LAYOUTS.map(() => '?').join(',');
-  const conds: string[] = [];
-  const params: unknown[] = [];
+  // For each name, pick the cheapest printing with valid sale data directly in
+  // SQL (only the winning row is fetched — no full printing-list transfer or
+  // per-row JSON parsing, which matters for high-printing cards like basic
+  // lands). Names with no priced printing fall back to the most-recent one.
+  const byName = cheapestRowsByNames(missing);
+
   for (const low of missing) {
-    conds.push(`(lower(name) = ? OR lower(name) LIKE ? ESCAPE '\\')`);
-    params.push(low, `${low} // %`);
-  }
-  const rows = catalogSqlite.prepare(
-    `SELECT ${CATALOG_SELECT} FROM scryfall_cards
-     WHERE (${conds.join(' OR ')})
-       AND layout NOT IN (${layoutPh})
-       AND set_code NOT LIKE 'y%' AND set_code != 'hbg' AND collector_number NOT LIKE 'A-%'
-     ORDER BY released_at DESC`
-  ).all(...params, ...NON_PLAYABLE_LAYOUTS) as CatalogCardRow[];
-
-  // O(1) lookup of which requested name a card belongs to.
-  const missingSet = new Set(missing);
-  const byName = new Map<string, string>();
-  for (const low of missing) byName.set(low, low);
-
-  // Pick, per name, the cheapest printing that actually has sale data. Cards
-  // with no price (usdPrice === null, e.g. $0.00 / no vendor) are ignored unless
-  // no printing for that card has any price at all — in which case we fall back
-  // to the most-recent printing rather than showing a $0.00 as "cheapest".
-  const fallback = new Map<string, CatalogCardRow>();
-  const priced = new Map<string, { card: CatalogCardRow; price: number }>();
-  const hitNames = new Set<string>();
-
-  for (const r of rows) {
-    const ln = r.name.toLowerCase();
-    // Fast membership + which name it resolves to.
-    const hit = findHit(ln, missingSet, missing);
-    if (hit === undefined) continue;
-    hitNames.add(hit);
-    if (!fallback.has(hit)) fallback.set(hit, r); // most-recent printing
-
-    const p = usdPrice(r);
-    if (p !== null) {
-      const ex = priced.get(hit);
-      if (!ex || p < ex.price) priced.set(hit, { card: r, price: p });
-    }
-  }
-
-  for (const hit of hitNames) {
-    let entry: { card: CatalogCardRow; price: number | null };
-    if (priced.has(hit)) {
-      entry = priced.get(hit)!;
-    } else {
-      const card = fallback.get(hit)!;
-      entry = { card, price: usdPrice(card) };
-    }
-    result.set(hit, entry);
-    cheapestCache.set(hit, { card: entry.card, price: entry.price, ts: Date.now() });
+    let entry: { card: CatalogCardRow; price: number | null } | undefined;
+    const win = byName.get(low);
+    if (win) entry = { card: win.card, price: win.price };
+    result.set(low, entry!);
+    cheapestCache.set(low, { card: win?.card as CatalogCardRow, price: win?.price ?? null, ts: Date.now() });
   }
   return result;
 }
 
-// Matches a card's lowercased name against the requested names, handling
-// double-faced names ("A // B") that were requested by their short face name.
-function findHit(lowerName: string, set: Set<string>, list: string[]): string | undefined {
-  if (set.has(lowerName)) return lowerName;
-  const idx = lowerName.indexOf(' // ');
-  if (idx > 0) {
-    const face = lowerName.slice(0, idx);
-    if (set.has(face)) return face;
+// Resolves each name to its single cheapest (priced) printing and, separately,
+// its most-recent printing as a fallback. The cheapest is selected in SQL so a
+// high-printing card (e.g. basic lands with ~900 printings) only ever returns
+// the winning row — never the whole printing list. If no printing has a valid
+// price, we fall back to the most recent printing (an untracked $0.00 card would
+// otherwise show "$0.00" as misleadingly "cheapest").
+function cheapestRowsByNames(names: string[]): Map<string, { card: CatalogCardRow; price: number | null }> {
+  const out = new Map<string, { card: CatalogCardRow; price: number | null }>();
+
+  // Cheapest priced printing, picked in SQL (INDEXED on name; only 1 row back).
+  const cheapestSql = catalogSqlite.prepare(
+    `SELECT ${CATALOG_SELECT} FROM scryfall_cards
+     WHERE name = ? COLLATE NOCASE AND ${NON_PLAYABLE_SQL} AND ${NON_ARENA_SQL}
+       AND CAST(json_extract(prices, '$.usd') AS REAL) > 0
+     ORDER BY CAST(json_extract(prices, '$.usd') AS REAL) ASC, released_at DESC
+     LIMIT 1`,
+  );
+  // Most-recent printing, as the fallback when nothing is priced.
+  const recentSql = catalogSqlite.prepare(
+    `SELECT ${CATALOG_SELECT} FROM scryfall_cards
+     WHERE name = ? COLLATE NOCASE AND ${NON_PLAYABLE_SQL} AND ${NON_ARENA_SQL}
+     ORDER BY released_at DESC LIMIT 1`,
+  );
+  const layoutParams = NON_PLAYABLE_LAYOUTS;
+
+  for (const low of names) {
+    const cheapest = cheapestSql.get(low, ...layoutParams) as CatalogCardRow | undefined;
+    if (cheapest) {
+      out.set(low, { card: cheapest, price: usdPrice(cheapest) });
+      continue;
+    }
+    const recent = recentSql.get(low, ...layoutParams) as CatalogCardRow | undefined;
+    if (recent) out.set(low, { card: recent, price: usdPrice(recent) });
   }
-  // Fallback linear scan for exact/prefix edge cases.
-  for (const low of list) {
-    if (lowerName === low || lowerName.startsWith(low + ' // ')) return low;
-  }
-  return undefined;
+  return out;
 }
 
 export function cheapestByName(name: string): { card: CatalogCardRow; price: number | null } | null {

@@ -32,6 +32,7 @@ export function initUserSchema(sqlite: DatabaseType) {
       destination_id INTEGER REFERENCES locations(id),
       deck_id INTEGER REFERENCES decks(id),
       foil INTEGER NOT NULL DEFAULT 0,
+      foreign_language INTEGER NOT NULL DEFAULT 0,
       condition TEXT,
       quantity INTEGER NOT NULL DEFAULT 1,
       purchase_price REAL,
@@ -222,6 +223,7 @@ export function initUserSchema(sqlite: DatabaseType) {
   if (!ciCols.includes('proxy')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN proxy INTEGER NOT NULL DEFAULT 0');
   if (!ciCols.includes('misprint')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN misprint INTEGER NOT NULL DEFAULT 0');
   if (!ciCols.includes('altered')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN altered INTEGER NOT NULL DEFAULT 0');
+  if (!ciCols.includes('foreign_language')) sqlite.exec('ALTER TABLE collection_items ADD COLUMN foreign_language INTEGER NOT NULL DEFAULT 0');
 
   const chCols = (sqlite.pragma('table_info(collection_history)') as Array<{ name: string }>).map(c => c.name);
   if (!chCols.includes('purchase_value')) sqlite.exec('ALTER TABLE collection_history ADD COLUMN purchase_value REAL');
@@ -272,8 +274,11 @@ export function initUserSchema(sqlite: DatabaseType) {
     ['idx_ci_card', 'CREATE INDEX IF NOT EXISTS idx_ci_card ON collection_items(card_id)'],
     ['idx_ci_deck', 'CREATE INDEX IF NOT EXISTS idx_ci_deck ON collection_items(deck_id)'],
     ['idx_ci_dest', 'CREATE INDEX IF NOT EXISTS idx_ci_dest ON collection_items(destination_id)'],
+    ['idx_ci_created', 'CREATE INDEX IF NOT EXISTS idx_ci_created ON collection_items(created_at)'],
+    ['idx_ci_dedupe', 'CREATE INDEX IF NOT EXISTS idx_ci_dedupe ON collection_items(card_id, location_id, foil, foreign_language, proxy, misprint, altered)'],
     ['idx_wl_dest', 'CREATE INDEX IF NOT EXISTS idx_wl_dest ON wantlist_items(destination_id)'],
     ['idx_wl_goal', 'CREATE INDEX IF NOT EXISTS idx_wl_goal ON wantlist_items(collection_goal_id)'],
+    ['idx_wl_name', 'CREATE INDEX IF NOT EXISTS idx_wl_name ON wantlist_items(card_name)'],
     ['idx_decks_group', 'CREATE INDEX IF NOT EXISTS idx_decks_group ON decks(group_id)'],
     ['idx_mh_item', 'CREATE INDEX IF NOT EXISTS idx_mh_item ON movement_history(item_id)'],
     ['idx_ti_trade', 'CREATE INDEX IF NOT EXISTS idx_ti_trade ON trade_items(trade_id)'],

@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { verifyPassword } from '../auth/password';
+import { verifyPassword, verifyDummyPassword } from '../auth/password';
 import {
   createSession, deleteSession, sessionCookieOptions, COOKIE_NAME, IMPERSONATE_COOKIE,
   readSessionCookie, readImpersonationCookie,
 } from '../auth/sessions';
 import { getUserByUsername, getUserById, getUserPasswordHash, setUserPassword, touchLastLogin, listUsers, updateProfile, type UserRow } from '../auth/users';
 import { requireAuth, type AuthenticatedRequest } from '../auth/middleware';
-import { isInstanceSetupDone } from '../services/setupStatus';
+import { isInstanceSetupDone, verifySetupToken } from '../services/setupStatus';
 import { cardById } from '../services/cards';
 
 export const authRouter = Router();
@@ -55,7 +55,13 @@ authRouter.post('/login', loginLimiter, (req, res) => {
   }
 
   const user = getUserByUsername(username);
-  if (!user || user.disabled || !verifyPassword(password, getUserPasswordHash(user.id))) {
+  if (!user || user.disabled) {
+    // Burn equal time for a missing user as for a wrong password so we don't
+    // leak which usernames exist via response timing.
+    if (!user) verifyDummyPassword(password);
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+  if (!verifyPassword(password, getUserPasswordHash(user.id))) {
     return res.status(401).json({ error: 'Invalid username or password' });
   }
 
@@ -76,10 +82,15 @@ authRouter.post('/demo-login', demoLoginLimiter, (req, res) => {
   res.json({ user: serializeUser(demo) });
 });
 
-// One-time bootstrap login: only works before the instance setup is completed.
+// One-time bootstrap login: only works before the instance setup is completed,
+// and only with the one-time setup token printed to the server console at boot.
 authRouter.post('/setup-login', (req, res) => {
   if (isInstanceSetupDone()) {
     return res.status(400).json({ error: 'Setup has already been completed. Sign in with your admin credentials.' });
+  }
+  const { token } = req.body ?? {};
+  if (typeof token !== 'string' || !verifySetupToken(token)) {
+    return res.status(401).json({ error: 'A valid one-time setup token is required. Check the server console/logs for it.' });
   }
   const adminRow = listUsers().find(u => u.role === 'admin');
   if (!adminRow) {
@@ -89,9 +100,9 @@ authRouter.post('/setup-login', (req, res) => {
   if (!admin || admin.disabled) {
     return res.status(400).json({ error: 'The admin account is not available.' });
   }
-  const { token } = createSession(admin.id);
+  const { token: sessionToken } = createSession(admin.id);
   touchLastLogin(admin.id);
-  res.cookie(COOKIE_NAME, token, sessionCookieOptions());
+  res.cookie(COOKIE_NAME, sessionToken, sessionCookieOptions());
   res.json({ user: serializeUser(admin) });
 });
 

@@ -11,6 +11,7 @@ export interface SharedCollectionItem {
   cardId: string;
   locationId: number;
   foil: number;
+  foreignLanguage: number;
   condition: string | null;
   quantity: number;
   proxy: number;
@@ -24,7 +25,7 @@ export interface SharedCollectionItem {
 export function getSharedCollection(userId: number): SharedCollectionItem[] {
   const conn = userConn(userId);
   const rows = conn.prepare(`
-    SELECT ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.foil, ci.condition,
+    SELECT ci.id, ci.card_id as cardId, ci.location_id as locationId, ci.foil, ci.foreign_language as foreignLanguage, ci.condition,
            ci.quantity, ci.proxy, ci.misprint, ci.altered, ci.notes,
            l.name as locationName
     FROM collection_items ci
@@ -32,7 +33,7 @@ export function getSharedCollection(userId: number): SharedCollectionItem[] {
     WHERE ci.deck_id IS NULL
     ORDER BY l.name, ci.id
   `).all() as Array<{
-    id: number; cardId: string; locationId: number; foil: number; condition: string | null;
+    id: number; cardId: string; locationId: number; foil: number; foreignLanguage: number; condition: string | null;
     quantity: number; proxy: number; misprint: number; altered: number; notes: string | null; locationName: string | null;
   }>;
 

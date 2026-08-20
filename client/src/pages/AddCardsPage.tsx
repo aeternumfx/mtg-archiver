@@ -17,6 +17,7 @@ interface PrintingForm {
   selected: boolean;
   quantity: number;
   foil: boolean;
+  foreignLanguage: boolean;
   condition: Condition | '';
   purchasePrice: string;
   packOpened: boolean;
@@ -44,7 +45,7 @@ const CONDITION_COLORS: Record<string, string> = {
 const PRINTINGS_PER_PAGE = 25;
 
 const defaultForm = (): PrintingForm => ({
-  selected: false, quantity: 1, foil: false, condition: 'NM' as Condition,
+  selected: false, quantity: 1, foil: false, foreignLanguage: false, condition: 'NM' as Condition,
   purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '',
 });
 
@@ -271,7 +272,7 @@ export default function AddCardsPage() {
       const priceAutofilled = (!customPrice && !defaultP) ? 1 : 0;
       const { item, created } = await api.collection.addDetailed({
         cardId: quickAddCard.id, locationId: Number(loc), quantity: quickForm.quantity || 1,
-        foil: quickForm.foil, condition: quickForm.condition || null,
+        foil: quickForm.foil, foreignLanguage: quickForm.foreignLanguage, condition: quickForm.condition || null,
         purchasePrice: purchasePrice ?? (priceAutofilled ? undefined : null),
         packOpened: quickForm.packOpened, notes: quickForm.notes || undefined,
         proxy: quickForm.proxy, misprint: quickForm.misprint, altered: quickForm.altered,
@@ -617,7 +618,7 @@ export default function AddCardsPage() {
       try {
         const { item, created } = await api.collection.addDetailed({
           cardId, locationId: Number(locOverride ?? selectedLoc), quantity: f.quantity || 1,
-          foil: f.foil, condition: f.condition || null,
+          foil: f.foil, foreignLanguage: f.foreignLanguage, condition: f.condition || null,
           purchasePrice: purchasePrice ?? (priceAutofilled ? undefined : null),
           packOpened: f.packOpened, notes: f.notes || undefined,
           destinationId: destOverrides?.[cardId] ?? (destLoc ? Number(destLoc) : undefined),
@@ -661,6 +662,7 @@ export default function AddCardsPage() {
         locationId: Number(loc),
         quantity: form?.quantity || 1,
         foil: form?.foil ?? false,
+        foreignLanguage: form?.foreignLanguage ?? false,
         condition: form?.condition || null,
         purchasePrice: purchasePrice ?? (priceAutofilled ? undefined : null),
         packOpened: form?.packOpened ?? false,
@@ -934,7 +936,7 @@ export default function AddCardsPage() {
                     <Table.Thead>
                       <Table.Tr style={{ height: 0, visibility: 'collapse' }}>
                         <Table.Th w={36} /><Table.Th /><Table.Th w={90} /><Table.Th w={55} />
-                        <Table.Th w={50} /><Table.Th w={46} /><Table.Th w={130} />
+                        <Table.Th w={50} /><Table.Th w={46} /><Table.Th w={46} /><Table.Th w={130} />
                         <Table.Th w={80} /><Table.Th w={62} /><Table.Th w={100} />
                       </Table.Tr>
                     </Table.Thead>
@@ -962,6 +964,11 @@ export default function AddCardsPage() {
                             disabled={!foilState(card).canFoil || foilState(card).foilOnly} size="xs" onLabel="F" offLabel="N"
                             color={f?.foil ? 'yellow' : undefined}
                             styles={{ track: !foilState(card).canFoil ? { cursor: 'not-allowed', opacity: 0.4 } : foilState(card).foilOnly ? { cursor: 'not-allowed', borderColor: 'var(--mantine-color-yellow-5)' } : {}, thumb: !foilState(card).canFoil || foilState(card).foilOnly ? { cursor: 'not-allowed' } : {} }} />
+                        </Table.Td>
+                        <Table.Td onClick={e => e.stopPropagation()}>
+                          <Switch checked={f?.foreignLanguage ?? false} onChange={e => updateAndSelect(card.id, { foreignLanguage: e.currentTarget.checked })}
+                            size="xs" onLabel="FL" offLabel="EN"
+                            color={f?.foreignLanguage ? 'teal' : undefined} />
                         </Table.Td>
                         <Table.Td onClick={e => e.stopPropagation()}>
                           <SegmentedControl value={f?.condition ?? 'NM'} onChange={v => updateAndSelect(card.id, { condition: v as Condition })}
@@ -1020,7 +1027,7 @@ export default function AddCardsPage() {
                         <Table.Tr>
                           <Table.Th w={36}></Table.Th><Table.Th>Card</Table.Th><Table.Th w={90}>Set</Table.Th>
                           <Table.Th w={55}>#</Table.Th><Table.Th w={50}>Qty</Table.Th><Table.Th w={46}>Foil</Table.Th>
-                          <Table.Th w={130}>Condition</Table.Th><Table.Th w={80}>Price $</Table.Th>
+                          <Table.Th w={46}>Lang</Table.Th><Table.Th w={130}>Condition</Table.Th><Table.Th w={80}>Price $</Table.Th>
                           <Table.Th w={62}>Pack</Table.Th><Table.Th w={100}>Notes</Table.Th>
                         </Table.Tr>
                       </Table.Thead>
@@ -1051,6 +1058,11 @@ export default function AddCardsPage() {
                                 disabled={!foilState(card).canFoil || foilState(card).foilOnly} size="xs" onLabel="F" offLabel="N"
                                 color={f?.foil ? 'yellow' : undefined}
                                 styles={{ track: !foilState(card).canFoil ? { cursor: 'not-allowed', opacity: 0.4 } : foilState(card).foilOnly ? { cursor: 'not-allowed', borderColor: 'var(--mantine-color-yellow-5)' } : {}, thumb: !foilState(card).canFoil || foilState(card).foilOnly ? { cursor: 'not-allowed' } : {} }} />
+                            </Table.Td>
+                            <Table.Td onClick={e => e.stopPropagation()}>
+                              <Switch checked={f?.foreignLanguage ?? false} onChange={e => updateAndSelect(card.id, { foreignLanguage: e.currentTarget.checked })}
+                                size="xs" onLabel="FL" offLabel="EN"
+                                color={f?.foreignLanguage ? 'teal' : undefined} />
                             </Table.Td>
                             <Table.Td onClick={e => e.stopPropagation()}>
                               <SegmentedControl value={f?.condition ?? 'NM'} onChange={v => updateAndSelect(card.id, { condition: v as Condition })}
@@ -1163,6 +1175,7 @@ export default function AddCardsPage() {
               <Switch label="Proxy" checked={quickForm.proxy} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, proxy: v })); }} size="sm" />
               <Switch label="Misprint" checked={quickForm.misprint} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, misprint: v })); }} size="sm" />
               <Switch label="Altered" checked={quickForm.altered} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, altered: v })); }} size="sm" />
+              <Switch label="Foreign language" checked={quickForm.foreignLanguage} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foreignLanguage: v })); }} size="sm" color="teal" />
             </Group>
             <Box style={{ position: 'relative' }}>
               <Select label="Location" placeholder="Select location" searchable selectFirstOptionOnChange

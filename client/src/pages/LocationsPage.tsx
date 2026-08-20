@@ -177,7 +177,10 @@ export default function LocationsPage() {
           await api.locations.setGroup(editLoc.id, locGroupId ? Number(locGroupId) : null);
         }
       } else {
-        await api.locations.create({ name: name.trim(), description: description.trim() || null, type: itemType });
+        const created = await api.locations.create({ name: name.trim(), description: description.trim() || null, type: itemType });
+        if (locGroupId) {
+          await api.locations.setGroup(created.id, Number(locGroupId));
+        }
       }
       closeLoc(); loadData();
     } catch (err: any) {

@@ -1,7 +1,14 @@
 import { scryptSync, randomBytes, timingSafeEqual } from 'crypto';
 
 const SCRYPT_KEYLEN = 64;
-const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1 } as const;
+// OWASP recommends N >= 2^17 for interactive logins. This is shared by login
+// passwords and share-view passwords. maxmem is raised to fit N=2^17 r=8.
+export const SCRYPT_OPTIONS = { N: 2 ** 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 } as const;
+
+// A valid hash of a random password, compared against when the username does
+// not exist so login takes the same time for missing vs incorrect users
+// (prevents username enumeration via response timing).
+const DUMMY_HASH = hashPassword('mtg-archiver-dummy-password');
 
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
@@ -21,6 +28,12 @@ export function verifyPassword(password: string, stored: string): boolean {
   } catch {
     return false;
   }
+}
+
+// Run a scrypt verification against a fixed dummy hash so that a request for a
+// non-existent username takes the same time as one for a real user.
+export function verifyDummyPassword(password: string): void {
+  verifyPassword(password, DUMMY_HASH);
 }
 
 export function generateTempPassword(length = 12): string {

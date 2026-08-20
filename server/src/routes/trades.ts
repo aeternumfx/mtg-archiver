@@ -1,7 +1,7 @@
 import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, inArray } from 'drizzle-orm';
 
 export const tradesRouter = Router();
 
@@ -24,10 +24,15 @@ function syncTradeGhosts(tradeId: number, trade: { status?: string; title?: stri
 
 tradesRouter.get('/', (_req, res) => {
   const allTrades = db.select().from(schema.trades).orderBy(desc(schema.trades.updatedAt)).all();
-  const result = allTrades.map(t => {
-    const items = db.select().from(schema.tradeItems).where(eq(schema.tradeItems.tradeId, t.id)).all();
-    return { ...t, items };
-  });
+  if (allTrades.length === 0) return res.json([]);
+  const tradeIds = allTrades.map(t => t.id);
+  const allItems = db.select().from(schema.tradeItems).where(inArray(schema.tradeItems.tradeId, tradeIds)).all();
+  const byTrade = new Map<number, typeof allItems>();
+  for (const it of allItems) {
+    if (!byTrade.has(it.tradeId)) byTrade.set(it.tradeId, []);
+    byTrade.get(it.tradeId)!.push(it);
+  }
+  const result = allTrades.map(t => ({ ...t, items: byTrade.get(t.id) ?? [] }));
   res.json(result);
 });
 
