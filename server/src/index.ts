@@ -64,14 +64,20 @@ app.use(cors({
 // so this blocks cross-site drives to the API even if the cookie were sent.
 const MUTATING = ['POST', 'PUT', 'PATCH', 'DELETE'];
 const isLocalhost = (h: string) => /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(h);
+// Extract the host(:port) portion of an Origin, ignoring the scheme. Comparing
+// against the Host header (rather than req.protocol + host) keeps this correct
+// behind reverse proxies / TLS terminators where req.protocol can misreport.
+const originHost = (origin: string) => {
+  try { return new URL(origin).host.toLowerCase(); } catch { return ''; }
+};
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && MUTATING.includes(req.method.toUpperCase())) {
-    const originHost = origin.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
-    const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
+    const reqHost = (req.get('host') || '').toLowerCase();
+    const sameOrigin = originHost(origin) === reqHost;
     const allowed = allowedOrigin.includes(origin);
     // Allow same-origin, the dev proxy (localhost client), or explicitly configured origins.
-    if (!sameOrigin && !allowed && !isLocalhost(originHost)) {
+    if (!sameOrigin && !allowed && !isLocalhost(originHost(origin))) {
       return res.status(403).json({ error: 'Cross-origin request rejected' });
     }
   }
