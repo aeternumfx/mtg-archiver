@@ -14,7 +14,6 @@ export default function AdminSetupWizard() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [domain, setDomain] = useState('');
   const [adminContactName, setAdminContactName] = useState('');
@@ -43,9 +42,7 @@ export default function AdminSetupWizard() {
   const next = () => {
     setError(null);
     if (step === 0) {
-      if (!currentPassword) { setError('Enter your current temporary password.'); return; }
       if (newPassword.length < 8) { setError('You must set a new admin password of at least 8 characters.'); return; }
-      if (newPassword === currentPassword) { setError('New password must be different from your current password.'); return; }
     }
     if (step === 1) {
       if (!domain.trim()) { setError('Domain is required.'); return; }
@@ -66,7 +63,6 @@ export default function AdminSetupWizard() {
         adminContactName: adminContactName.trim(),
         adminContactEmail: adminContactEmail.trim(),
         demoEnabled: enableDemo === 'yes',
-        currentPassword: currentPassword || undefined,
         newPassword: newPassword || undefined,
       });
       notifications.show({ title: 'Setup complete', message: 'Your instance is ready to go.', color: 'green' });
@@ -103,16 +99,13 @@ export default function AdminSetupWizard() {
               <div>
                 <Text fw={600} size="md">Welcome!</Text>
                 <Text size="sm" c="dimmed">
-                  You're signed in as <b>{adminUsername}</b> with a temporary login. Set a new password before
-                  continuing.
+                  You're signed in as <b>{adminUsername}</b>. Set a password for your admin account to continue.
                 </Text>
               </div>
             </Group>
-            <PasswordInput label="Current temporary password" value={currentPassword}
-              onChange={e => setCurrentPassword(e.currentTarget.value)} required data-autofocus />
             <PasswordInput label="New admin password" value={newPassword}
               onChange={e => setNewPassword(e.currentTarget.value)}
-              description="At least 8 characters, and different from the temporary password." required />
+              description="At least 8 characters." required data-autofocus />
           </Stack>
         )}
 

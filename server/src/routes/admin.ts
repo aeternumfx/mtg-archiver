@@ -239,11 +239,18 @@ adminRouter.post('/complete-setup', (req, res) => {
     if (typeof newPassword !== 'string' || newPassword.length < 8) {
       return res.status(400).json({ error: 'You must set a new admin password of at least 8 characters' });
     }
-    if (typeof currentPassword !== 'string' || currentPassword === newPassword) {
+    if (currentPassword === newPassword) {
       return res.status(400).json({ error: 'New password must be different from your current password' });
     }
-    if (!verifyPassword(currentPassword, getUserPasswordHash(actor.userId))) {
-      return res.status(401).json({ error: 'Current password is incorrect' });
+    // During the initial setup the admin arrives via the one-time setup token and
+    // never had (or needs) a temporary password to enter here. Only require and
+    // verify the current password when re-running setup on an already-initialised
+    // instance (e.g. via Settings after a reset), where reusing a real password is
+    // safer before allowing an overwrite.
+    if (isInstanceSetupDone()) {
+      if (typeof currentPassword !== 'string' || !verifyPassword(currentPassword, getUserPasswordHash(actor.userId))) {
+        return res.status(401).json({ error: 'Current password is incorrect' });
+      }
     }
     setUserPassword(actor.userId, newPassword, false);
   } else {
