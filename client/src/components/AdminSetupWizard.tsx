@@ -5,6 +5,7 @@ import {
 import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconArrowRight, IconArrowLeft, IconRocket, IconCheck, IconX } from '@tabler/icons-react';
 import { api } from '../api/client';
+import { setInstanceSetupVisible } from '../auth/instanceSetupState';
 
 export default function AdminSetupWizard() {
   const [ready, setReady] = useState(false);
@@ -36,6 +37,14 @@ export default function AdminSetupWizard() {
     window.addEventListener('mtg:instance-reset', onInstanceReset);
     return () => window.removeEventListener('mtg:instance-reset', onInstanceReset);
   }, [load]);
+
+  // Signal when the instance setup wizard is actually on screen so the generic
+  // per-user "set your password" dialog doesn't stack on top of it.
+  useEffect(() => {
+    const visible = ready && !done;
+    setInstanceSetupVisible(visible);
+    return () => { if (visible) setInstanceSetupVisible(false); };
+  }, [ready, done]);
 
   if (!ready || done) return null;
 

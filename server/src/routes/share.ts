@@ -149,6 +149,10 @@ profilePrivacyRouter.put('/', requireAuth, (req: AuthenticatedRequest, res) => {
 });
 
 const SCRYPT_COST = { ...SCRYPT_OPTIONS };
+// Share-view password hashes stored before the scrypt cost increase used the
+// legacy N=16384. Parameter-less `share:salt:hash` values must verify against
+// both so existing share passwords keep working after an upgrade/import.
+const LEGACY_SHARE_COST = { N: 16384, r: 8, p: 1 } as const;
 
 function hashFrom(pw: string): string {
   const salt = randomBytes(16).toString('hex');
@@ -156,18 +160,23 @@ function hashFrom(pw: string): string {
   return `share:${salt}:${hash}`;
 }
 
-function verifySharePassword(pw: string, stored: string | null): boolean {
-  if (!stored) return false;
-  const parts = stored.split(':');
-  if (parts.length !== 3 || parts[0] !== 'share') return false;
-  const [, salt, hashHex] = parts as [string, string, string];
+function shareVerify(pw: string, salt: string, hashHex: string, cost: typeof SCRYPT_COST): boolean {
   try {
-    const candidate = scryptSync(pw, 'share:' + salt, 64, SCRYPT_COST);
+    const candidate = scryptSync(pw, 'share:' + salt, 64, cost);
     const expected = Buffer.from(hashHex, 'hex');
     return candidate.length === expected.length && timingSafeEqual(candidate, expected);
   } catch {
     return false;
   }
+}
+
+function verifySharePassword(pw: string, stored: string | null): boolean {
+  if (!stored) return false;
+  const parts = stored.split(':');
+  if (parts.length !== 3 || parts[0] !== 'share') return false;
+  const [, salt, hashHex] = parts as [string, string, string];
+  return shareVerify(pw, salt, hashHex, SCRYPT_COST)
+    || shareVerify(pw, salt, hashHex, LEGACY_SHARE_COST as typeof SCRYPT_COST);
 }
 
 interface ShareUser {

@@ -2,17 +2,21 @@ import { useState } from 'react';
 import { Modal, PasswordInput, Button, Stack, Text, Alert } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
 import { useAuth } from './AuthContext';
+import { useInstanceSetupVisible } from './instanceSetupState';
 import { api } from '../api/client';
 
 export function ChangePasswordModal() {
   const { user, setUser } = useAuth();
+  const instanceSetup = useInstanceSetupVisible();
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const opened = !!user?.mustChangePassword;
+  // While the one-time instance setup wizard is showing, don't also force the
+  // per-user "set your password" dialog (the admin sets their password there).
+  const opened = !!user?.mustChangePassword && !instanceSetup;
 
   const submit = async () => {
     setError(null);
