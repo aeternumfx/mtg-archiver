@@ -8,6 +8,7 @@ import {
 import { getUserByUsername, getUserById, getUserPasswordHash, setUserPassword, touchLastLogin, listUsers, updateProfile, type UserRow } from '../auth/users';
 import { requireAuth, type AuthenticatedRequest } from '../auth/middleware';
 import { isInstanceSetupDone, verifySetupToken } from '../services/setupStatus';
+import { getSystemSettings } from '../services/systemSettings';
 import { cardById } from '../services/cards';
 
 export const authRouter = Router();
@@ -37,6 +38,7 @@ const changePasswordLimiter = rateLimit({
 });
 
 function serializeUser(u: UserRow) {
+  const s = getSystemSettings();
   return {
     id: u.id,
     username: u.username,
@@ -45,6 +47,14 @@ function serializeUser(u: UserRow) {
     isDemo: !!u.demo,
     displayName: u.displayName,
     avatar: u.avatar,
+    paymentRef: u.paymentRef,
+    membershipTier: u.membershipTier,
+    paidUntil: u.paidUntil,
+    freeMonths: u.freeMonths,
+    paidMonths: u.paidMonths,
+    trialWeeks: u.trialWeeks,
+    arrearsDays: s.arrearsDays,
+    arrearsAction: s.arrearsAction,
   };
 }
 

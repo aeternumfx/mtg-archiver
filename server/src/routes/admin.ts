@@ -5,7 +5,7 @@ import path from 'path';
 import multer from 'multer';
 import { requireAdmin, type AuthenticatedRequest } from '../auth/middleware';
 import {
-  listUsers, getUserById, getUserByUsername, getUserPasswordHash, createUser, setUserPassword, updateUser,
+  listUsers, getUserById, getUserByUsername, getUserPasswordHash, createUser, setUserPassword, updateUser, setUserBilling, MEMBERSHIP_TIERS, type MembershipTier,
   permanentlyDeleteUser, deleteAllUsersExcept, generateTempPassword, adminStats, usernameExistsCaseInsensitive,
 } from '../auth/users';
 import { verifyPassword } from '../auth/password';
@@ -149,7 +149,7 @@ adminRouter.get('/settings', (_req, res) => {
 
 adminRouter.put('/settings', (req, res) => {
   const body = req.body ?? {};
-  const allowed = ['scryfallStaleHours', 'setsRefreshHours', 'sessionTtlDays', 'instanceName', 'domain', 'adminContactName', 'adminContactEmail'];
+  const allowed = ['scryfallStaleHours', 'setsRefreshHours', 'sessionTtlDays', 'instanceName', 'domain', 'adminContactName', 'adminContactEmail', 'basicPrice', 'proPrice', 'accountName', 'accountHolder', 'arrearsDays', 'arrearsAction'];
   const partial: Record<string, unknown> = {};
   for (const key of allowed) {
     if (body[key] !== undefined) partial[key] = body[key];
@@ -397,6 +397,47 @@ adminRouter.patch('/users/:id', (req, res) => {
   const updated = getUserById(id);
   const counts = sessionCountsByUser();
   res.json(updated ? { ...updated, activeSessions: counts.get(id) ?? 0 } : updated);
+});
+
+// Update a user's membership tier, paid-on date, free-month credit, valid-until
+// date and notes. This is a manual record only — it does not handle any payments.
+// Free months run first (green on the calendar), then billed months.
+adminRouter.post('/users/:id/billing', (req, res) => {
+  const id = Number(req.params.id);
+  const user = getUserById(id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  let { membershipTier, paidUntil, paidOn, freeMonths, paidMonths, trialWeeks, billingNotes } = req.body ?? {};
+  if (membershipTier !== undefined) {
+    if (!MEMBERSHIP_TIERS.includes(membershipTier)) {
+      return res.status(400).json({ error: 'membershipTier must be one of: complimentary, basic, pro, trial' });
+    }
+  } else {
+    membershipTier = user.membershipTier;
+  }
+  const validDate = (v: unknown) =>
+    (v === undefined || v === null) ? null
+      : (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : 'INVALID');
+  const until = validDate(paidUntil);
+  if (until === 'INVALID') return res.status(400).json({ error: 'paidUntil must be a YYYY-MM-DD date or null' });
+  const on = validDate(paidOn);
+  if (on === 'INVALID') return res.status(400).json({ error: 'paidOn must be a YYYY-MM-DD date or null' });
+  const clampMonths = (v: unknown, fallback: number) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) ? Math.max(0, Math.min(120, n)) : fallback;
+  };
+  if (billingNotes !== undefined && billingNotes !== null && typeof billingNotes !== 'string') {
+    return res.status(400).json({ error: 'billingNotes must be a string or null' });
+  }
+  setUserBilling(id, {
+    membershipTier: membershipTier as MembershipTier,
+    paidUntil: until,
+    paidOn: on,
+    freeMonths: freeMonths !== undefined ? clampMonths(freeMonths, 0) : undefined,
+    paidMonths: paidMonths !== undefined ? clampMonths(paidMonths, 0) : undefined,
+    trialWeeks: trialWeeks !== undefined ? clampMonths(trialWeeks, 0) : undefined,
+    billingNotes: billingNotes !== undefined ? (billingNotes === null ? null : billingNotes.trim() || null) : undefined,
+  });
+  res.json(getUserById(id));
 });
 
 adminRouter.post('/users/:id/revoke-sessions', (req, res) => {

@@ -1,5 +1,6 @@
 import { startSync, initScryfallSync, getSyncStatus, syncSets } from '../services/scryfall';
 import { getSystemSettings } from '../services/systemSettings';
+import { enforceArrears } from '../services/arrears';
 
 interface Job {
   name: string;
@@ -59,6 +60,23 @@ const setsJob: Job = {
 };
 
 jobs.push(scryfallJob, setsJob);
+
+const arrearsJob: Job = {
+  name: 'enforce-arrears',
+  due: () => true,
+  run: async () => {
+    try {
+      const res = enforceArrears();
+      if (res.disabled > 0) {
+        console.log(`Arrears enforcement disabled ${res.disabled} account(s) past their grace period.`);
+      }
+    } catch (err) {
+      console.error('Arrears enforcement failed:', err);
+    }
+  },
+};
+
+jobs.push(arrearsJob);
 
 function tick() {
   for (const job of jobs) {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Title, Text, Stack, Paper, Group, TextInput, NumberInput, Button, Alert, SimpleGrid, Modal, Checkbox, Badge,
+  Title, Text, Stack, Paper, Group, TextInput, NumberInput, Button, Alert, SimpleGrid, Modal, Checkbox, Badge, Divider, SegmentedControl,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconRefresh, IconSettings, IconAlertTriangle, IconTrash, IconEraser } from '@tabler/icons-react';
@@ -48,6 +48,12 @@ export default function AdminSystemSettingsPage() {
         domain: settings.domain,
         adminContactName: settings.adminContactName,
         adminContactEmail: settings.adminContactEmail,
+        basicPrice: settings.basicPrice,
+        proPrice: settings.proPrice,
+        accountName: settings.accountName,
+        accountHolder: settings.accountHolder,
+        arrearsDays: settings.arrearsDays,
+        arrearsAction: settings.arrearsAction,
       });
       setSettings(updated);
       setSaved(`Saved at ${new Date().toLocaleTimeString()}`);
@@ -198,6 +204,76 @@ export default function AdminSystemSettingsPage() {
             onChange={e => { const v = e.currentTarget.value; setSettings(s => s ? { ...s, domain: v } : s); }}
             maxLength={128}
           />
+
+          <Paper withBorder p="md" radius="md" style={{ background: 'transparent' }}>
+            <Text fw={600} size="sm" mb="xs">Billing</Text>
+            <Text size="xs" c="dimmed" mb="md">
+              Prices shown to users, and the account details they use to pay you. Payment details also appear on each
+              user's profile page.
+            </Text>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md" mb="md">
+              <TextInput
+                label="Basic plan price"
+                placeholder="e.g. 5.00 / month"
+                value={settings.basicPrice}
+                onChange={e => { const v = e.currentTarget.value; setSettings(s => s ? { ...s, basicPrice: v } : s); }}
+                maxLength={16}
+              />
+              <TextInput
+                label="Pro plan price"
+                placeholder="e.g. 10.00 / month"
+                value={settings.proPrice}
+                onChange={e => { const v = e.currentTarget.value; setSettings(s => s ? { ...s, proPrice: v } : s); }}
+                maxLength={16}
+              />
+            </SimpleGrid>
+            <TextInput
+              label="Account number"
+              description="The account users should send payments to."
+              placeholder="e.g. IBAN / sort code + account number"
+              value={settings.accountName}
+              onChange={e => { const v = e.currentTarget.value; setSettings(s => s ? { ...s, accountName: v } : s); }}
+              maxLength={64}
+              mb="sm"
+            />
+            <TextInput
+              label="Account holder name"
+              description="The name the account is registered to."
+              placeholder="e.g. Sarah Johnson"
+              value={settings.accountHolder}
+              onChange={e => { const v = e.currentTarget.value; setSettings(s => s ? { ...s, accountHolder: v } : s); }}
+              maxLength={64}
+            />
+            <Divider my="lg" />
+            <Text fw={600} size="sm" mb={4}>Arrears</Text>
+            <Text size="xs" c="dimmed" mb="md">
+              How long an unpaid user can keep using their account after their plan ends, and what happens when that
+              grace period runs out.
+            </Text>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <NumberInput
+                label="Arrears grace period (days)"
+                description="Default 14 (2 weeks). 0 disables the grace period."
+                value={settings.arrearsDays}
+                onChange={v => setSettings(s => s ? { ...s, arrearsDays: Number(v) || 0 } : s)}
+                min={0}
+                max={365}
+                step={1}
+              />
+              <div>
+                <Text size="sm" fw={500} mb={6}>When arrears expires</Text>
+                <SegmentedControl
+                  fullWidth
+                  value={settings.arrearsAction}
+                  onChange={v => setSettings(s => s ? { ...s, arrearsAction: v as 'disable' | 'none' } : s)}
+                  data={[
+                    { value: 'disable', label: 'Disable account' },
+                    { value: 'none', label: 'Do nothing' },
+                  ]}
+                />
+              </div>
+            </SimpleGrid>
+          </Paper>
 
           <Paper withBorder p="md" radius="md" style={{ background: 'transparent' }}>
             <Group justify="space-between" mb="xs" wrap="nowrap">

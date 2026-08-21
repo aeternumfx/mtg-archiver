@@ -50,6 +50,21 @@ body {
   box-shadow: var(--mantine-shadow-md);
 }
 
+/* Mantine date-picker sizing tweak: the calendar header's prev/next chevron
+   buttons use the "sm" size (2.25rem) by default, which reads as oversized next
+   to the compact picker input. Constrain them and their chevrons. The buttons
+   carry data-direction="previous"/"next". */
+button[data-direction="previous"],
+button[data-direction="next"] {
+  width: 1.625rem;
+  height: 1.625rem !important;
+}
+button[data-direction="previous"] svg,
+button[data-direction="next"] svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

@@ -4,9 +4,10 @@ import {
   Loader, Alert, Tooltip, Box, Modal, ActionIcon, Divider, Badge, SegmentedControl, PasswordInput, Code,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconSearch, IconCheck, IconPencil, IconTrash, IconCopy } from '@tabler/icons-react';
+import { IconSearch, IconCheck, IconPencil, IconTrash, IconCopy, IconCoin, IconCreditCard } from '@tabler/icons-react';
 import { useAuth } from '../auth/AuthContext';
 import { api } from '../api/client';
+import { notifications } from '@mantine/notifications';
 import type { GroupedCard } from '../types';
 
 interface PickedArt {
@@ -149,6 +150,14 @@ export default function ProfilePage() {
   const [privacyMsg, setPrivacyMsg] = useState<{ type: 'ok' | 'error'; text: string } | null>(null);
   const [colPassword, setColPassword] = useState('');
   const [wantPassword, setWantPassword] = useState('');
+  const [billingInfo, setBillingInfo] = useState<{ basicPrice: string; proPrice: string; accountName: string; accountHolder: string } | null>(null);
+
+  useEffect(() => {
+    api.data.billing()
+      .then(s => setBillingInfo({ basicPrice: s.basicPrice, proPrice: s.proPrice, accountName: s.accountName, accountHolder: s.accountHolder }))
+      .catch(() => {});
+  }, []);
+
 
   useEffect(() => {
     api.privacy.get()
@@ -350,6 +359,69 @@ export default function ProfilePage() {
         </Stack>
       </Modal>
     </Paper>
+
+      <Paper withBorder p="lg" radius="md">
+        <Group mb="md">
+          <IconCoin size={20} />
+          <Title order={3}>Plan & Payments</Title>
+        </Group>
+        <Text size="sm" c="dimmed" mb="lg">
+          Your membership makes supporting this instance possible. Use your payment reference when sending a payment
+          so it can be matched to your account.
+        </Text>
+
+        <Divider mb="lg" />
+
+        <Text size="sm" fw={600} mb={4}>Your payment reference</Text>
+        <Text size="xs" c="dimmed" mb="sm">
+          Include this code in the payment note/reference when you pay.
+        </Text>
+        {user?.paymentRef ? (
+          <Group gap="sm" align="center" wrap="nowrap">
+            <Code style={{ fontSize: 20, fontWeight: 700, letterSpacing: '0.15em', padding: '6px 14px' }}>{user.paymentRef}</Code>
+            <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />}
+              onClick={() => { navigator.clipboard.writeText(user.paymentRef ?? ''); notifications.show({ title: 'Copied', message: 'Payment reference copied', color: 'green' }); }}>
+              Copy
+            </Button>
+          </Group>
+        ) : (
+          <Text size="sm" c="dimmed">A payment reference will be assigned to your account.</Text>
+        )}
+
+        {billingInfo && (billingInfo.basicPrice || billingInfo.proPrice) && (
+          <>
+            <Divider my="lg" />
+            <Text size="sm" fw={600} mb="sm">Plans</Text>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              {billingInfo.basicPrice && (
+                <Box>
+                  <Group gap="sm" mb={4}><Badge size="sm" color="blue" variant="light">Basic</Badge></Group>
+                  <Text size="md" fw={700}>{billingInfo.basicPrice}</Text>
+                </Box>
+              )}
+              {billingInfo.proPrice && (
+                <Box>
+                  <Badge size="sm" color="violet" variant="light" mb={4}>Pro</Badge>
+                  <Text size="md" fw={700}>{billingInfo.proPrice}</Text>
+                </Box>
+              )}
+            </SimpleGrid>
+          </>
+        )}
+
+        {billingInfo && (billingInfo.accountName || billingInfo.accountHolder) && (
+          <>
+            <Divider my="lg" />
+            <Group gap="sm" mb="sm"><IconCreditCard size={18} /><Text size="sm" fw={600}>Account details</Text></Group>
+            {billingInfo.accountName && (
+              <Group gap="sm" mb={4}><Text size="xs" c="dimmed" w={120}>Account number</Text><Code>{billingInfo.accountName}</Code></Group>
+            )}
+            {billingInfo.accountHolder && (
+              <Group gap="sm"><Text size="xs" c="dimmed" w={120}>Holder name</Text><Text size="sm" fw={500}>{billingInfo.accountHolder}</Text></Group>
+            )}
+          </>
+        )}
+      </Paper>
 
       {user?.role !== 'admin' && (
         <Paper withBorder p="lg" radius="md">

@@ -3,7 +3,7 @@ import {
   AppShell, Burger, Group, Title, NavLink, Text, Tooltip, Modal, Badge, Button, ActionIcon, Menu, Avatar, Stack,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar, IconShieldLock, IconLogout, IconUser, IconChartBar, IconUsers, IconAdjustments, IconMessageCircle, IconEye, IconInfoCircle, IconRocket } from '@tabler/icons-react';
+import { IconHome, IconCards, IconPlus, IconPackages, IconArchive, IconSettings, IconRefresh, IconGift, IconStack, IconHeart, IconArrowsLeftRight, IconSortDescending, IconCurrencyDollar, IconShieldLock, IconLogout, IconUser, IconChartBar, IconUsers, IconAdjustments, IconMessageCircle, IconEye, IconInfoCircle, IconRocket, IconCoin, IconClock } from '@tabler/icons-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import SyncBanner from './SyncBanner';
 import SetupGuide from './SetupGuide';
@@ -31,10 +31,149 @@ const navItems: Array<{ label: string; path: string; icon: any; badge?: string; 
 const adminNavItems: Array<{ label: string; path: string; icon: any; badge?: string; tour: string }> = [
   { label: 'Admin Dashboard', path: '/admin', icon: IconChartBar, tour: 'admin-dashboard' },
   { label: 'Users', path: '/admin/users', icon: IconUsers, tour: 'admin-users' },
+  { label: 'Billing', path: '/admin/billing', icon: IconCoin, tour: 'admin-billing' },
   { label: 'User Requests', path: '/admin/requests', icon: IconMessageCircle, tour: 'admin-requests' },
   { label: 'System Settings', path: '/admin/settings', icon: IconAdjustments, tour: 'admin-settings' },
   { label: 'Updates & Backup', path: '/admin/updates', icon: IconRocket, tour: 'admin-updates' },
 ];
+
+const PLAN_META: Record<string, { label: string; color: string; tooltip: string }> = {
+  trial: {
+    label: 'Trial',
+    color: 'yellow',
+    tooltip: 'You are on the free trial plan with full access to all features. Contact an admin to purchase a plan to continue using the service after the trial ends.',
+  },
+  complimentary: {
+    label: 'Complimentary',
+    color: 'gray',
+    tooltip: 'You are on the complimentary plan with full access to all features!',
+  },
+  basic: {
+    label: 'Basic',
+    color: 'blue',
+    tooltip: 'You are on the basic plan. Upgrade to a PRO plan for full access to all features!',
+  },
+  pro: {
+    label: 'Pro',
+    color: 'violet',
+    tooltip: 'You are on the pro plan with full access to all features!',
+  },
+};
+
+function PlanBadge({ tier }: { tier?: string }) {
+  const meta = PLAN_META[tier ?? ''] ?? PLAN_META.complimentary;
+  return (
+    <Tooltip label={meta.tooltip} multiline w={280} withArrow zIndex={300}>
+      <Badge size="sm" variant="filled" color={meta.color} radius="sm" tt="uppercase" style={{ fontWeight: 700, cursor: 'default' }}>
+        {meta.label}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+function TrialCountdown({ paidUntil }: { paidUntil?: string | null }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!paidUntil) return;
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, [paidUntil]);
+
+  if (!paidUntil) return null;
+  const end = new Date(paidUntil + 'T23:59:59');
+  const endTime = end.getTime();
+  if (Number.isNaN(endTime)) return null;
+  const diff = endTime - now;
+  if (diff <= 0) {
+    return (
+      <Tooltip label="Your trial has ended. Contact an admin to continue using the service." withArrow>
+        <Badge size="sm" variant="filled" color="red" radius="sm" tt="uppercase" style={{ fontWeight: 700, cursor: 'default' }}>Trial ended</Badge>
+      </Tooltip>
+    );
+  }
+  const days = Math.floor(diff / 86400000);
+  const hours = Math.floor((diff % 86400000) / 3600000);
+  const minutes = Math.floor((diff % 3600000) / 60000);
+  const text = days > 0 ? `${days}d ${hours}h left` : hours > 0 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+  const soon = diff < 5 * 86400000;
+  if (soon) {
+    return (
+      <Tooltip label="Upgrade for full access before your trial ends." withArrow>
+        <Badge
+          size="sm"
+          variant="light"
+          color="red"
+          radius="sm"
+          style={{
+            fontWeight: 700,
+            cursor: 'default',
+            border: '1.5px solid var(--mantine-color-red-6)',
+            color: 'var(--mantine-color-red-6)',
+          }}
+        >
+          <IconClock size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
+          {text} · Your trial will end soon! Upgrade for full access!
+        </Badge>
+      </Tooltip>
+    );
+  }
+  return (
+    <Tooltip label="Days left on your trial" withArrow>
+      <Badge size="sm" variant="light" color="teal" radius="sm" style={{ fontWeight: 700, cursor: 'default' }}>
+        <IconClock size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
+        {text}
+      </Badge>
+    </Tooltip>
+  );
+}
+
+// Shown to an account whose paid period has ended but is still within the
+// configured arrears grace period. Warns them to pay before access is lost.
+function ArrearsBadge({ paidUntil, arrearsDays }: { paidUntil?: string | null; arrearsDays?: number }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!paidUntil) return;
+    const t = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, [paidUntil]);
+
+  if (!paidUntil) return null;
+  const end = new Date(paidUntil + 'T23:59:59');
+  const endTime = end.getTime();
+  if (Number.isNaN(endTime)) return null;
+  const graceMs = (arrearsDays ?? 0) * 86400000;
+  const lastDay = endTime + graceMs;
+  if (now <= endTime) return null; // not in arrears yet
+  if (now > lastDay) return null; // arrears fully expired (account handled separately)
+
+  const diff = lastDay - now;
+  const days = Math.ceil(diff / 86400000);
+  const lastDate = new Date(lastDay).toLocaleDateString();
+  const text = days > 0 ? `${days} day${days > 1 ? 's' : ''} left` : 'less than a day left';
+  return (
+    <Tooltip
+      label={`Your account is in arrears. Pay to continue using the service, otherwise you'll lose access on ${lastDate}.`}
+      multiline w={280} withArrow
+    >
+      <Badge
+        size="sm"
+        variant="filled"
+        color="orange"
+        radius="sm"
+        style={{
+          fontWeight: 700,
+          cursor: 'default',
+          border: '1.5px solid var(--mantine-color-orange-8)',
+        }}
+      >
+        <IconClock size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
+        In arrears · {text}
+      </Badge>
+    </Tooltip>
+  );
+}
 
 function syncAge(lastSync: string | null): { label: string; color: string; hours: number | null } {
   if (!lastSync) return { label: 'Never synced', color: 'red', hours: null };
@@ -96,8 +235,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 DEV
               </Badge>
             )}
+            {!user?.isDemo && user?.membershipTier && <PlanBadge tier={user.membershipTier} />}
           </Group>
           <Group gap="xs">
+            {!user?.isDemo && user?.membershipTier === 'trial' && (
+              <TrialCountdown paidUntil={user?.paidUntil} />
+            )}
+            {!user?.isDemo && user?.paidUntil && (
+              <ArrearsBadge paidUntil={user?.paidUntil} arrearsDays={user?.arrearsDays} />
+            )}
             <Tooltip label={`Card data last synced: ${ago}`}>
               <Group gap={4} style={{ cursor: 'default' }}>
                 <IconRefresh size={14} style={{ opacity: 0.5 }} />

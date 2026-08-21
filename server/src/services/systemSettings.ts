@@ -15,6 +15,18 @@ export interface SystemSettings {
   adminContactName: string;
   /** Contact email for the system administrator. */
   adminContactEmail: string;
+  /** Monthly price shown for the basic membership tier. */
+  basicPrice: string;
+  /** Monthly price shown for the pro membership tier. */
+  proPrice: string;
+  /** Account/payment details shown to users (account number). */
+  accountName: string;
+  /** Account holder name shown to users when paying. */
+  accountHolder: string;
+  /** Grace period (in days) a user may continue using an unpaid account. */
+  arrearsDays: number;
+  /** What happens when arrears expires: 'disable' the account, or 'none'. */
+  arrearsAction: 'disable' | 'none';
 }
 
 const SETTINGS_KEY = 'system_settings';
@@ -28,6 +40,12 @@ function defaults(): SystemSettings {
     domain: '',
     adminContactName: '',
     adminContactEmail: '',
+    basicPrice: '',
+    proPrice: '',
+    accountName: '',
+    accountHolder: '',
+    arrearsDays: 14,
+    arrearsAction: 'disable',
   };
 }
 
@@ -57,6 +75,14 @@ export function getSystemSettings(): SystemSettings {
       adminContactEmail: typeof stored.adminContactEmail === 'string'
         ? stored.adminContactEmail.trim().slice(0, 128)
         : base.adminContactEmail,
+      basicPrice: typeof stored.basicPrice === 'string' ? stored.basicPrice.trim().slice(0, 16) : base.basicPrice,
+      proPrice: typeof stored.proPrice === 'string' ? stored.proPrice.trim().slice(0, 16) : base.proPrice,
+      accountName: typeof stored.accountName === 'string' ? stored.accountName.trim().slice(0, 64) : base.accountName,
+      accountHolder: typeof stored.accountHolder === 'string' ? stored.accountHolder.trim().slice(0, 64) : base.accountHolder,
+      arrearsDays: clampInt(stored.arrearsDays, 0, 365, base.arrearsDays),
+      arrearsAction: stored.arrearsAction === 'none' || stored.arrearsAction === 'disable'
+        ? stored.arrearsAction
+        : base.arrearsAction,
     };
   } catch {
     return base;
@@ -93,6 +119,26 @@ export function updateSystemSettings(partial: Partial<SystemSettings>): SystemSe
           ? partial.adminContactEmail.trim().slice(0, 128)
           : current.adminContactEmail)
       : current.adminContactEmail,
+    basicPrice: partial.basicPrice !== undefined
+      ? (typeof partial.basicPrice === 'string' ? partial.basicPrice.trim().slice(0, 16) : current.basicPrice)
+      : current.basicPrice,
+    proPrice: partial.proPrice !== undefined
+      ? (typeof partial.proPrice === 'string' ? partial.proPrice.trim().slice(0, 16) : current.proPrice)
+      : current.proPrice,
+    accountName: partial.accountName !== undefined
+      ? (typeof partial.accountName === 'string' ? partial.accountName.trim().slice(0, 64) : current.accountName)
+      : current.accountName,
+    accountHolder: partial.accountHolder !== undefined
+      ? (typeof partial.accountHolder === 'string' ? partial.accountHolder.trim().slice(0, 64) : current.accountHolder)
+      : current.accountHolder,
+    arrearsDays: partial.arrearsDays !== undefined
+      ? clampInt(partial.arrearsDays, 0, 365, current.arrearsDays)
+      : current.arrearsDays,
+    arrearsAction: partial.arrearsAction !== undefined
+      ? (partial.arrearsAction === 'none' || partial.arrearsAction === 'disable'
+          ? partial.arrearsAction
+          : current.arrearsAction)
+      : current.arrearsAction,
   };
   systemSqlite.prepare('INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)')
     .run(SETTINGS_KEY, JSON.stringify(next));

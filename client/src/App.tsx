@@ -23,6 +23,7 @@ import ProfilePage from './pages/ProfilePage';
 import ShareViewPage from './pages/ShareViewPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
+import AdminBillingPage from './pages/admin/AdminBillingPage';
 import AdminRequestsPage from './pages/admin/AdminRequestsPage';
 import AdminUpdatesPage from './pages/admin/AdminUpdatesPage';
 import AdminSystemSettingsPage from './pages/admin/AdminSystemSettingsPage';
@@ -86,6 +87,9 @@ export default function App() {
             } />
             <Route path="/admin/users" element={
               <RequireAuth><RequireAdmin><Layout><AdminUsersPage /></Layout></RequireAdmin></RequireAuth>
+            } />
+            <Route path="/admin/billing" element={
+              <RequireAuth><RequireAdmin><Layout><AdminBillingPage /></Layout></RequireAdmin></RequireAuth>
             } />
             <Route path="/admin/requests" element={
               <RequireAuth><RequireAdmin><Layout><AdminRequestsPage /></Layout></RequireAdmin></RequireAuth>

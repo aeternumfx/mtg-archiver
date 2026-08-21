@@ -81,6 +81,14 @@ export interface AuthUser {
   isDemo?: boolean;
   displayName?: string | null;
   avatar?: string | null;
+  paymentRef?: string | null;
+  membershipTier?: string;
+  paidUntil?: string | null;
+  freeMonths?: number;
+  paidMonths?: number;
+  trialWeeks?: number;
+  arrearsDays?: number;
+  arrearsAction?: 'disable' | 'none';
 }
 
 export interface SystemSettings {
@@ -91,6 +99,12 @@ export interface SystemSettings {
   domain: string;
   adminContactName: string;
   adminContactEmail: string;
+  basicPrice: string;
+  proPrice: string;
+  accountName: string;
+  accountHolder: string;
+  arrearsDays: number;
+  arrearsAction: 'disable' | 'none';
 }
 
 export interface UpdateStatus {
@@ -228,7 +242,7 @@ export const api = {
   },
 
   admin: {
-    users: () => request<Array<{ id: number; username: string; displayName: string | null; avatar: string | null; role: string; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null; activeSessions: number; pendingTour: boolean; demo: boolean; storageBytes: number }>>('/api/admin/users'),
+    users: () => request<Array<{ id: number; username: string; displayName: string | null; avatar: string | null; role: string; disabled: number; mustChangePassword: number; createdAt: string; lastLoginAt: string | null; activeSessions: number; pendingTour: boolean; demo: boolean; storageBytes: number; membershipTier: string; paidUntil: string | null; paidOn: string | null; freeMonths: number; paidMonths: number; trialWeeks: number; billingNotes: string | null; paymentRef: string | null }>>('/api/admin/users'),
     setupStatus: () => request<{ done: boolean; adminUsername: string }>('/api/admin/setup-status'),
     completeSetup: (data: { domain: string; adminContactName: string; adminContactEmail: string; demoEnabled: boolean; currentPassword?: string; newPassword?: string }) =>
       request<{ ok: boolean; settings: SystemSettings }>('/api/admin/complete-setup', { method: 'POST', body: JSON.stringify(data) }),
@@ -326,6 +340,8 @@ export const api = {
       request<{ message: string }>(`/api/admin/users/${id}/reset-tour`, { method: 'POST' }),
     deleteUser: (id: number, permanent?: boolean) =>
       request<{ message: string }>(`/api/admin/users/${id}`, { method: 'DELETE', body: JSON.stringify({ permanent }) }),
+    updateBilling: (id: number, data: { membershipTier?: 'trial' | 'complimentary' | 'basic' | 'pro'; paidUntil?: string | null; paidOn?: string | null; freeMonths?: number; paidMonths?: number; trialWeeks?: number; billingNotes?: string | null }) =>
+      request<any>(`/api/admin/users/${id}/billing`, { method: 'POST', body: JSON.stringify(data) }),
   },
 
   syncStatus: () => request<SyncStatus>('/api/sync-status'),
@@ -397,6 +413,7 @@ export const api = {
   },
 
   data: {
+    billing: () => request<{ basicPrice: string; proPrice: string; accountName: string; accountHolder: string }>('/api/data/billing'),
     export: () => request<{
       version: number;
       exportedAt: string;

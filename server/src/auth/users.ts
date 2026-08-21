@@ -20,25 +20,59 @@ export interface UserRow {
   collectionPrivacy: string;
   wantlistPrivacy: string;
   shareToken: string | null;
+  membershipTier: string;
+  paidUntil: string | null;
+  paidOn: string | null;
+  freeMonths: number;
+  paidMonths: number;
+  trialWeeks: number;
+  billingNotes: string | null;
+  paymentRef: string | null;
   createdAt: string;
   lastLoginAt: string | null;
 }
 
+export type MembershipTier = 'trial' | 'complimentary' | 'basic' | 'pro';
+export const MEMBERSHIP_TIERS: MembershipTier[] = ['trial', 'complimentary', 'basic', 'pro'];
+
 const USER_COLS = `id, username, role, disabled, must_change_password as mustChangePassword, demo,
   display_name as displayName, avatar,
   collection_privacy as collectionPrivacy, wantlist_privacy as wantlistPrivacy, share_token as shareToken,
+  membership_tier as membershipTier, paid_until as paidUntil, paid_on as paidOn,
+  free_months as freeMonths, paid_months as paidMonths, trial_weeks as trialWeeks, billing_notes as billingNotes,
+  payment_ref as paymentRef,
   created_at as createdAt, last_login_at as lastLoginAt`;
 
 export function getUserByUsername(username: string): UserRow | undefined {
   return systemSqlite.prepare(`SELECT ${USER_COLS} FROM users WHERE username = ?`).get(username) as UserRow | undefined;
 }
 
+export function getUserById(id: number): UserRow | undefined {
+  return systemSqlite.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(id) as UserRow | undefined;
+}
+
 export function usernameExistsCaseInsensitive(username: string): boolean {
   return !!systemSqlite.prepare('SELECT 1 FROM users WHERE LOWER(username) = LOWER(?)').get(username);
 }
 
-export function getUserById(id: number): UserRow | undefined {
-  return systemSqlite.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(id) as UserRow | undefined;
+// Generates a unique 6-digit payment reference code used by the user to mark
+// their payments. Retries on the (rare) collision.
+function generatePaymentRef(): string {
+  for (let i = 0; i < 20; i++) {
+    const ref = String(Math.floor(100000 + Math.random() * 900000));
+    const exists = systemSqlite.prepare('SELECT 1 FROM users WHERE payment_ref = ?').get(ref);
+    if (!exists) return ref;
+  }
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+// Backfills any legacy users that predate the payment_ref column, so every
+// account gets a reference code. Safe to call on every boot.
+export function ensurePaymentRefs(): void {
+  const missing = systemSqlite.prepare('SELECT id FROM users WHERE payment_ref IS NULL').all() as Array<{ id: number }>;
+  for (const { id } of missing) {
+    systemSqlite.prepare('UPDATE users SET payment_ref = ? WHERE id = ?').run(generatePaymentRef(), id);
+  }
 }
 
 export function getUserPasswordHash(userId: number): string {
@@ -49,8 +83,8 @@ export function getUserPasswordHash(userId: number): string {
 export function createUser(username: string, password: string, role: 'admin' | 'moderator' | 'user', mustChangePassword: boolean, demo = false): UserRow {
   const hash = hashPassword(password);
   const result = systemSqlite.prepare(
-    'INSERT INTO users (username, password_hash, role, must_change_password, demo) VALUES (?, ?, ?, ?, ?)'
-  ).run(username, hash, role, mustChangePassword ? 1 : 0, demo ? 1 : 0);
+    'INSERT INTO users (username, password_hash, role, must_change_password, demo, payment_ref) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(username, hash, role, mustChangePassword ? 1 : 0, demo ? 1 : 0, generatePaymentRef());
   const id = Number(result.lastInsertRowid);
   return getUserById(id)!;
 }
@@ -74,6 +108,29 @@ export function updateUser(userId: number, fields: { disabled?: boolean; role?: 
   params.push(userId);
   systemSqlite.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   if (fields.disabled) deleteUserSessions(userId);
+}
+
+export function setUserBilling(userId: number, fields: {
+  membershipTier?: MembershipTier;
+  paidUntil?: string | null;
+  paidOn?: string | null;
+  freeMonths?: number;
+  paidMonths?: number;
+  trialWeeks?: number;
+  billingNotes?: string | null;
+}) {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (fields.membershipTier !== undefined) { sets.push('membership_tier = ?'); params.push(fields.membershipTier); }
+  if (fields.paidUntil !== undefined) { sets.push('paid_until = ?'); params.push(fields.paidUntil === null ? null : String(fields.paidUntil)); }
+  if (fields.paidOn !== undefined) { sets.push('paid_on = ?'); params.push(fields.paidOn === null ? null : String(fields.paidOn)); }
+  if (fields.freeMonths !== undefined) { sets.push('free_months = ?'); params.push(Math.max(0, Math.floor(Number(fields.freeMonths) || 0))); }
+  if (fields.paidMonths !== undefined) { sets.push('paid_months = ?'); params.push(Math.max(0, Math.floor(Number(fields.paidMonths) || 0))); }
+  if (fields.trialWeeks !== undefined) { sets.push('trial_weeks = ?'); params.push(Math.max(0, Math.floor(Number(fields.trialWeeks) || 0))); }
+  if (fields.billingNotes !== undefined) { sets.push('billing_notes = ?'); params.push(fields.billingNotes === null ? null : String(fields.billingNotes)); }
+  if (sets.length === 0) return;
+  params.push(userId);
+  systemSqlite.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...params);
 }
 
 export function touchLastLogin(userId: number) {

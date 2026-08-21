@@ -919,13 +919,18 @@ export default function DecksPage() {
         .find(t => tl.includes(t)) || 'Other';
       types[primary] = (types[primary] || 0) + qty;
 
-      const cmc = item.card.cmc ?? 0;
-      const bucket = Math.min(7, Math.floor(cmc));
-      manaCurve[bucket] = (manaCurve[bucket] || 0) + qty;
-      avgCmc += cmc * qty;
-      cmcCount += qty;
+      const isLand = tl.includes('Land');
+      // Exclude lands from the mana curve and average CMC — a land isn't a
+      // 0-mana spell, so it shouldn't sit in the 0 bucket or drag the average.
+      if (!isLand) {
+        const cmc = item.card.cmc ?? 0;
+        const bucket = Math.min(7, Math.floor(cmc));
+        manaCurve[bucket] = (manaCurve[bucket] || 0) + qty;
+        avgCmc += cmc * qty;
+        cmcCount += qty;
+      }
 
-      if (!tl.includes('Land')) {
+      if (!isLand) {
         const cid = item.card.colorIdentity || [];
         if (cid.length === 0) colors['C'] = (colors['C'] || 0) + qty;
         else cid.forEach(c => { colors[c] = (colors[c] || 0) + qty; });

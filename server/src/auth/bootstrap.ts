@@ -1,9 +1,13 @@
 import { systemSqlite } from '../db/system';
-import { createUser, listUsers } from './users';
+import { createUser, listUsers, ensurePaymentRefs } from './users';
 import { generateTempPassword } from './password';
 import { ensureSetupToken, isInstanceSetupDone } from '../services/setupStatus';
 
 export function bootstrapAdmin() {
+  // Backfill payment reference codes for any existing users that predate the
+  // feature so every account has one.
+  ensurePaymentRefs();
+
   const count = systemSqlite.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number };
   if (count.c > 0) return;
 

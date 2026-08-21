@@ -4,6 +4,7 @@ import { db, sqlite, getSessionContext } from '../db';
 import { schema } from '../db';
 import { clearUserSetup } from '../services/setupStatus';
 import { computeImportDiff, resolveImportData, runImport } from '../services/importCompat';
+import { getSystemSettings } from '../services/systemSettings';
 
 export const dataRouter = Router();
 
@@ -66,9 +67,21 @@ export function resetToSetup(mode: 'basic' | 'recommended') {
   ensureInbox();
 }
 
+// Billing details shown to users on their profile so they know how to pay and
+// what the plans cost. Deliberately only exposes billing fields (no other admin
+// settings) to any authenticated user.
+dataRouter.get('/billing', (_req, res) => {
+  const s = getSystemSettings();
+  res.json({
+    basicPrice: s.basicPrice,
+    proPrice: s.proPrice,
+    accountName: s.accountName,
+    accountHolder: s.accountHolder,
+  });
+});
+
 dataRouter.get('/export', (_req, res) => {
-  const locationGroups = db.select().from(schema.locationGroups).all();
-  const locations = db.select().from(schema.locations).all();
+  const locationGroups = db.select().from(schema.locationGroups).all();  const locations = db.select().from(schema.locations).all();
   const collectionItems = db.select().from(schema.collectionItems).all();
   const collectionHistory = db.select().from(schema.collectionHistory).all();
   const decks = db.select().from(schema.decks).all();

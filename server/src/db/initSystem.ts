@@ -55,7 +55,15 @@ export function initSystemSchema(sqlite: DatabaseType) {
       disabled INTEGER NOT NULL DEFAULT 0,
       demo INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_login_at TEXT
+      last_login_at TEXT,
+      paid_until TEXT,
+      paid_on TEXT,
+      free_months INTEGER NOT NULL DEFAULT 0,
+      paid_months INTEGER NOT NULL DEFAULT 0,
+      trial_weeks INTEGER NOT NULL DEFAULT 0,
+      membership_tier TEXT NOT NULL DEFAULT 'complimentary',
+      billing_notes TEXT,
+      payment_ref TEXT
     )
   `);
 
@@ -83,6 +91,30 @@ export function initSystemSchema(sqlite: DatabaseType) {
   }
   if (!userCols.includes('share_token')) {
     sqlite.exec('ALTER TABLE users ADD COLUMN share_token TEXT');
+  }
+  if (!userCols.includes('paid_until')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN paid_until TEXT');
+  }
+  if (!userCols.includes('paid_on')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN paid_on TEXT');
+  }
+  if (!userCols.includes('free_months')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN free_months INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userCols.includes('paid_months')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN paid_months INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userCols.includes('trial_weeks')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN trial_weeks INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!userCols.includes('membership_tier')) {
+    sqlite.exec("ALTER TABLE users ADD COLUMN membership_tier TEXT NOT NULL DEFAULT 'complimentary'");
+  }
+  if (!userCols.includes('payment_ref')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN payment_ref TEXT');
+  }
+  if (!userCols.includes('billing_notes')) {
+    sqlite.exec('ALTER TABLE users ADD COLUMN billing_notes TEXT');
   }
 
   sqlite.exec(`
