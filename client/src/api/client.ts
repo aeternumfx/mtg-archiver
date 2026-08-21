@@ -368,6 +368,8 @@ export const api = {
   cards: {
     find: (q: string, opts?: { counts?: boolean }) =>
       request<CardResult[]>(`/api/cards/find?q=${encodeURIComponent(q)}${opts?.counts ? '&counts=1' : ''}`),
+    resolveBulk: (queries: string[]) =>
+      request<Record<string, ScryfallCard[]>>('/api/cards/resolve-bulk', { method: 'POST', body: JSON.stringify({ queries }) }),
     grouped: (q: string, page = 1, filters?: Record<string, string>, opts?: { counts?: boolean }) => {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
@@ -495,7 +497,7 @@ export const api = {
     history: () => request<any[]>('/api/booster/history'),
     finish: (data: {
       setCode: string; boosterType: string; boosterPrice: number;
-      pulls: Array<{ cardId: string; foil: boolean; slotIndex: number; locationId: number | null }>;
+      pulls: Array<{ cardId: string; foil: boolean; slotIndex: number; locationId: number | null; destinationId?: number | null }>;
     }) => request<{ session: any; totalValue: number }>('/api/booster/finish', {
       method: 'POST', body: JSON.stringify(data),
     }),
@@ -549,10 +551,14 @@ export const api = {
       request<{ item: { id: number; quantity: number }; remainingGhost: { id: number; deckId: number; cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } | null }>(`/api/decks/${id}/required/${reqId}/fill-external`, { method: 'POST', body: JSON.stringify(data) }),
     fillRequiredExternalBulk: (id: number, reqIds: number[]) =>
       request<{ results: Array<{ reqId: number; itemId: number; quantity: number; remainingGhost: { id: number; quantity: number } | null; ghost: { cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } }> }>(`/api/decks/${id}/required/fill-external-bulk`, { method: 'POST', body: JSON.stringify({ reqIds }) }),
+    undoFillExternalBulk: (id: number, results: Array<{ itemId: number; ghost: { cardId: string | null; cardName: string; setCode: string | null; collectorNumber: string | null; quantity: number } }>) =>
+      request<{ ok: boolean; message: string }>(`/api/decks/${id}/required/undo-fill-bulk`, { method: 'POST', body: JSON.stringify({ results }) }),
     moveRequired: (id: number, reqId: number, data: { destinationType: 'location' | 'deck'; destinationId: number }) =>
       request<any>(`/api/decks/${id}/required/${reqId}/move`, { method: 'POST', body: JSON.stringify(data) }),
     importDeck: (data: { name: string; description?: string; deckType?: string; content: string; format?: 'auto' | 'csv' | 'text' }) =>
       request<any>('/api/decks/import', { method: 'POST', body: JSON.stringify(data) }),
+    importFromUrl: (data: { name: string; description?: string; deckType?: string; url: string; specificPrintings?: boolean }) =>
+      request<any>('/api/decks/import-url', { method: 'POST', body: JSON.stringify(data) }),
   },
 
   collection: {

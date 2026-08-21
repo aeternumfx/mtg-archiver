@@ -82,3 +82,47 @@ button[data-direction="next"] svg {
 ::-webkit-scrollbar-thumb:hover {
   background: color-mix(in srgb, var(--mantine-color-gray-text) 40%, transparent);
 }
+
+/* Galaxy theme: fixed starfield behind the app content. */
+.starfield {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.starfield-nebula {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 70% at 12% 10%, rgba(125, 90, 255, 0.22), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 85% 75%, rgba(90, 140, 255, 0.16), transparent 60%),
+    radial-gradient(ellipse 60% 50% at 60% 90%, rgba(255, 110, 200, 0.12), transparent 60%);
+}
+
+.starfield-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.starfield-layer-1 {
+  animation: starfield-twinkle 6s ease-in-out infinite;
+}
+
+.starfield-layer-2 {
+  animation: starfield-twinkle 8s ease-in-out 2s infinite;
+}
+
+.starfield-layer-3 {
+  animation: starfield-twinkle 12s ease-in-out 4s infinite;
+}
+
+@keyframes starfield-twinkle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Title, Paper, Group, Text, TextInput, Button, Avatar, SimpleGrid, Stack,
-  Loader, Alert, Tooltip, Box, Modal, ActionIcon, Divider, Badge, SegmentedControl, PasswordInput, Code,
+  Loader, Alert, Tooltip, Box, Modal, ActionIcon, Divider, Badge, SegmentedControl, PasswordInput, Code, Tabs,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
-import { IconSearch, IconCheck, IconPencil, IconTrash, IconCopy, IconCoin, IconCreditCard } from '@tabler/icons-react';
+import { IconSearch, IconCheck, IconPencil, IconTrash, IconCopy, IconCoin, IconCreditCard, IconAlertTriangle, IconLock } from '@tabler/icons-react';
 import { useAuth } from '../auth/AuthContext';
 import { api } from '../api/client';
 import { notifications } from '@mantine/notifications';
@@ -34,8 +34,43 @@ function artFor(card: GroupedCard): { url: string; faceIdx: number | null } {
   return { url: '', faceIdx: null };
 }
 
+function PlanCard({ name, color, rawPrice, active, accent }: {
+  name: string; color: string; rawPrice: string; active?: boolean; accent?: string;
+}) {
+  const price = rawPrice
+    .trim()
+    .replace(/^[$€£]/, '')
+    .replace(/\s*\/\s*(mo|month)s?.*$/i, '')
+    .replace(/\s*per\s*(mo|month)s?.*$/i, '')
+    .trim();
+  if (!price) return null;
+  return (
+    <Paper withBorder p="lg" radius="md"
+      style={active && accent ? { borderColor: accent, borderWidth: 2 } : undefined}>
+      <Group gap="sm" mb="sm" align="center">
+        <Badge size="sm" color={color} variant="light">{name}</Badge>
+        {active && <Badge size="xs" color={color} variant="filled">Current plan</Badge>}
+      </Group>
+      <Group align="baseline" gap={4} wrap="nowrap">
+        <Text size="md" fw={700}>$</Text>
+        <Text size="xl" fw={700} style={{ lineHeight: 1 }}>{price}</Text>
+        <Text size="sm" c="dimmed">/month</Text>
+      </Group>
+    </Paper>
+  );
+}
+
+function currentPlan(tier?: string): { card: 'basic' | 'pro'; accent: string } | null {
+  if (!tier) return null;
+  if (tier === 'basic') return { card: 'basic', accent: 'var(--mantine-color-blue-6)' };
+  if (tier === 'trial') return { card: 'pro', accent: 'var(--mantine-color-yellow-6)' };
+  if (tier === 'pro' || tier === 'complimentary') return { card: 'pro', accent: 'var(--mantine-color-violet-6)' };
+  return null;
+}
+
 export default function ProfilePage() {
   const { user, setUser } = useAuth();
+  const plan = currentPlan(user?.membershipTier);
   const [displayName, setDisplayName] = useState<string>(user?.displayName ?? '');
   const [dirtyName, setDirtyName] = useState(false);
   const [savingName, setSavingName] = useState(false);
@@ -196,6 +231,15 @@ export default function ProfilePage() {
       setPrivacyMsg({ type: 'ok', text: 'Share link copied to clipboard.' });
     } catch {
       setPrivacyMsg({ type: 'error', text: 'Could not copy. Select the link manually.' });
+    }
+  };
+
+  const copy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notifications.show({ title: 'Copied', message: `${label} copied to clipboard`, color: 'green' });
+    } catch {
+      notifications.show({ title: 'Error', message: `Could not copy ${label.toLowerCase()}.`, color: 'red' });
     }
   };
 
@@ -360,75 +404,21 @@ export default function ProfilePage() {
       </Modal>
     </Paper>
 
-      <Paper withBorder p="lg" radius="md">
-        <Group mb="md">
-          <IconCoin size={20} />
-          <Title order={3}>Plan & Payments</Title>
-        </Group>
-        <Text size="sm" c="dimmed" mb="lg">
-          Your membership makes supporting this instance possible. Use your payment reference when sending a payment
-          so it can be matched to your account.
-        </Text>
+      <Tabs defaultValue={user?.role === 'admin' ? 'plan' : 'privacy'}>
+        <Tabs.List>
+          {user?.role !== 'admin' && (
+            <Tabs.Tab value="privacy" leftSection={<IconLock size={14} />}>Sharing & Privacy</Tabs.Tab>
+          )}
+          <Tabs.Tab value="plan" leftSection={<IconCoin size={14} />}>Plan & Payments</Tabs.Tab>
+        </Tabs.List>
 
-        <Divider mb="lg" />
-
-        <Text size="sm" fw={600} mb={4}>Your payment reference</Text>
-        <Text size="xs" c="dimmed" mb="sm">
-          Include this code in the payment note/reference when you pay.
-        </Text>
-        {user?.paymentRef ? (
-          <Group gap="sm" align="center" wrap="nowrap">
-            <Code style={{ fontSize: 20, fontWeight: 700, letterSpacing: '0.15em', padding: '6px 14px' }}>{user.paymentRef}</Code>
-            <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />}
-              onClick={() => { navigator.clipboard.writeText(user.paymentRef ?? ''); notifications.show({ title: 'Copied', message: 'Payment reference copied', color: 'green' }); }}>
-              Copy
-            </Button>
-          </Group>
-        ) : (
-          <Text size="sm" c="dimmed">A payment reference will be assigned to your account.</Text>
-        )}
-
-        {billingInfo && (billingInfo.basicPrice || billingInfo.proPrice) && (
-          <>
-            <Divider my="lg" />
-            <Text size="sm" fw={600} mb="sm">Plans</Text>
-            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-              {billingInfo.basicPrice && (
-                <Box>
-                  <Group gap="sm" mb={4}><Badge size="sm" color="blue" variant="light">Basic</Badge></Group>
-                  <Text size="md" fw={700}>{billingInfo.basicPrice}</Text>
-                </Box>
-              )}
-              {billingInfo.proPrice && (
-                <Box>
-                  <Badge size="sm" color="violet" variant="light" mb={4}>Pro</Badge>
-                  <Text size="md" fw={700}>{billingInfo.proPrice}</Text>
-                </Box>
-              )}
-            </SimpleGrid>
-          </>
-        )}
-
-        {billingInfo && (billingInfo.accountName || billingInfo.accountHolder) && (
-          <>
-            <Divider my="lg" />
-            <Group gap="sm" mb="sm"><IconCreditCard size={18} /><Text size="sm" fw={600}>Account details</Text></Group>
-            {billingInfo.accountName && (
-              <Group gap="sm" mb={4}><Text size="xs" c="dimmed" w={120}>Account number</Text><Code>{billingInfo.accountName}</Code></Group>
-            )}
-            {billingInfo.accountHolder && (
-              <Group gap="sm"><Text size="xs" c="dimmed" w={120}>Holder name</Text><Text size="sm" fw={500}>{billingInfo.accountHolder}</Text></Group>
-            )}
-          </>
-        )}
-      </Paper>
-
-      {user?.role !== 'admin' && (
-        <Paper withBorder p="lg" radius="md">
-          <Group justify="space-between" mb="md">
-            <Title order={3}>Sharing & Privacy</Title>
-            <Button size="compact-sm" onClick={savePrivacy} loading={privacySaving}>Save</Button>
-          </Group>
+        {user?.role !== 'admin' && (
+          <Tabs.Panel value="privacy" pt="md">
+            <Paper withBorder p="lg" radius="md">
+              <Group justify="space-between" mb="md">
+                <Title order={3}>Sharing & Privacy</Title>
+                <Button size="compact-sm" onClick={savePrivacy} loading={privacySaving}>Save</Button>
+              </Group>
           <Text size="sm" c="dimmed" mb="lg">
             Control how your Collection and Wantlist can be seen by friends. You can share a link, and optionally
             protect each view with a password. Shared views are read-only.
@@ -494,7 +484,99 @@ export default function ProfilePage() {
             </>
           )}
         </Paper>
+        </Tabs.Panel>
       )}
+
+      <Tabs.Panel value="plan" pt="md">
+        <Paper withBorder p="lg" radius="md">
+          <Group mb="md">
+            <IconCoin size={20} />
+            <Title order={3}>Plan & Payments</Title>
+          </Group>
+        <Text size="sm" c="dimmed" mb="lg">
+          Your membership makes supporting this instance possible. Use your payment reference when sending a payment
+          so it can be matched to your account.
+        </Text>
+
+        {billingInfo && (billingInfo.basicPrice || billingInfo.proPrice) && (
+          <>
+            <Divider mb="lg" />
+            <Text size="sm" fw={600} mb="sm">Plans</Text>
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              <PlanCard name="Basic" color="blue" rawPrice={billingInfo.basicPrice}
+                active={plan?.card === 'basic'} accent={plan?.card === 'basic' ? plan.accent : undefined} />
+              <PlanCard name="Pro" color="violet" rawPrice={billingInfo.proPrice}
+                active={plan?.card === 'pro'} accent={plan?.card === 'pro' ? plan.accent : undefined} />
+            </SimpleGrid>
+            {user?.membershipTier === 'trial' && (
+              <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light" mt="md">
+                <Text size="sm" fw={600}>You're on the trial of the Pro version.</Text>
+                <Text size="xs" c="dimmed">
+                  You currently have full access to all Pro features while your trial is active.
+                </Text>
+              </Alert>
+            )}
+          </>
+        )}
+
+        <Divider my="lg" />
+
+        <Group gap="sm" mb="xs">
+          <IconCreditCard size={18} />
+          <Text size="sm" fw={600}>How to pay</Text>
+        </Group>
+        <Text size="xs" c="dimmed" mb="md">
+          Your reference is mandatory and appears on every payment you send.
+        </Text>
+
+        {user?.paymentRef ? (
+          <Paper withBorder p="md" radius="md" style={{ background: 'transparent' }}>
+            <Stack gap="sm">
+              <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light" p="sm" mb="xs">
+                <Text size="sm" fw={600}>Your payment reference is mandatory.</Text>
+                <Text size="xs" c="dimmed">
+                  Include it in the payment note/reference when you pay. Payments without it can't be matched to your
+                  account.
+                </Text>
+              </Alert>
+
+              <Group gap="sm" align="center" wrap="nowrap">
+                <Text size="xs" c="dimmed" fw={600} w={140}>Your reference</Text>
+                <Code style={{ fontSize: 18, fontWeight: 700, letterSpacing: '0.15em' }}>{user.paymentRef}</Code>
+                <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />}
+                  onClick={() => copy(user.paymentRef ?? '', 'Payment reference')}>
+                  Copy
+                </Button>
+              </Group>
+
+              {billingInfo?.accountName && (
+                <Group gap="sm" align="center" wrap="nowrap">
+                  <Text size="xs" c="dimmed" w={140}>Account number</Text>
+                  <Code style={{ flex: 1 }}>{billingInfo.accountName}</Code>
+                  <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />}
+                    onClick={() => copy(billingInfo.accountName, 'Account number')}>
+                    Copy
+                  </Button>
+                </Group>
+              )}
+              {billingInfo?.accountHolder && (
+                <Group gap="sm" align="center" wrap="nowrap">
+                  <Text size="xs" c="dimmed" w={140}>Account holder</Text>
+                  <Text size="sm" fw={500} style={{ flex: 1 }}>{billingInfo.accountHolder}</Text>
+                  <Button variant="light" size="compact-sm" leftSection={<IconCopy size={14} />}
+                    onClick={() => copy(billingInfo.accountHolder, 'Account holder')}>
+                    Copy
+                  </Button>
+                </Group>
+              )}
+            </Stack>
+          </Paper>
+        ) : (
+          <Text size="sm" c="dimmed">A payment reference will be assigned to your account.</Text>
+        )}
+      </Paper>
+      </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }

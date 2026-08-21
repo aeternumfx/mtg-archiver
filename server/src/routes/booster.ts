@@ -2,7 +2,7 @@ import { fail } from '../utils/http';
 import { Router } from 'express';
 import { db, sqlite, schema } from '../db';
 import { eq, desc, inArray } from 'drizzle-orm';
-import { cardsByIds } from '../services/cards';
+import { cardsByIds, localizeCardFaces, localImageUris } from '../services/cards';
 
 export const boosterRouter = Router();
 
@@ -16,8 +16,26 @@ boosterRouter.get('/history', (_req, res) => {
   const allPulls = db.select().from(schema.boosterPulls)
     .where(inArray(schema.boosterPulls.sessionId, sessionIds))
     .all();
-  const bySession = new Map<number, typeof allPulls>();
-  for (const p of allPulls) {
+
+  // Attach the pulled card's name/prices/art so the client can show value breakdowns.
+  const cards = cardsByIds(Array.from(new Set(allPulls.map(p => p.cardId))));
+  const enrichedPulls = allPulls.map(p => {
+    const c = cards.get(p.cardId);
+    let prices = null;
+    let name = null;
+    let imageUris = null;
+    let cardFaces = null;
+    if (c) {
+      name = c.name;
+      try { prices = c.prices ? JSON.parse(c.prices) : null; } catch { prices = null; }
+      try { imageUris = c.imageUris ? localImageUris(c.id, c.imageUris) : null; } catch { imageUris = null; }
+      try { cardFaces = c.cardFaces ? localizeCardFaces(c.id, c.cardFaces) : null; } catch { cardFaces = null; }
+    }
+    return { ...p, card: name ? { name, prices, imageUris, cardFaces } : null };
+  });
+
+  const bySession = new Map<number, typeof enrichedPulls>();
+  for (const p of enrichedPulls) {
     if (!bySession.has(p.sessionId)) bySession.set(p.sessionId, []);
     bySession.get(p.sessionId)!.push(p);
   }
@@ -60,7 +78,7 @@ boosterRouter.post('/finish', (req, res) => {
       }, 0);
 
       const session = db.insert(schema.boosterSessions)
-        .values({ setCode, boosterType, boosterPrice, totalValue })
+        .values({ setCode, boosterType, boosterPrice, totalValue, completed: 1 })
         .returning().get();
 
       for (const pull of pulls) {
@@ -93,6 +111,7 @@ boosterRouter.post('/finish', (req, res) => {
             .values({
               cardId: pull.cardId,
               locationId: pull.locationId,
+              destinationId: pull.destinationId ?? null,
               quantity: 1,
               foil: pull.foil ? 1 : 0,
               purchasePrice: boosterPrice / pulls.length,

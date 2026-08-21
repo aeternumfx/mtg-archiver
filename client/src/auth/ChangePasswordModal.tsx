@@ -16,7 +16,8 @@ export function ChangePasswordModal() {
 
   // While the one-time instance setup wizard is showing, don't also force the
   // per-user "set your password" dialog (the admin sets their password there).
-  const opened = !!user?.mustChangePassword && !instanceSetup;
+  // Never show it while impersonating, either.
+  const opened = !!user?.mustChangePassword && !instanceSetup && !user.impersonating;
 
   const submit = async () => {
     setError(null);

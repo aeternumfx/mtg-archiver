@@ -30,6 +30,10 @@ export default function LoginPage() {
       const dest = u.mustChangePassword ? '/login' : (u.role === 'admin' ? '/admin' : '/dashboard');
       navigate(dest, { replace: true });
     } catch (err: any) {
+      if (err?.body?.code === 'ACCOUNT_DISABLED') {
+        navigate('/disabled', { replace: true });
+        return;
+      }
       setError(err.message || 'Login failed');
     } finally {
       setBusy(false);

@@ -87,6 +87,46 @@ const parseCard = (c: any) => ({
   cardFaces: localizeCardFaces(c.id, c.cardFaces),
 });
 
+// Resolve a set code + collector number to printings. Tries an exact
+// collector-number match first, then falls back to a prefix match (used by the
+// smart add search and the bulk importer alike).
+function findBySetNum(setCode: string, rawNum: string): any[] {
+  const numVariants = [rawNum];
+  const stripped = rawNum.replace(/^0+/, '');
+  if (stripped !== rawNum && stripped.length > 0) numVariants.push(stripped);
+
+  const allMatch = catalogDb.select(cardFields)
+    .from(schema.scryfallCards)
+    .where(and(
+      NOT_ARENA,
+      eq(schema.scryfallCards.setCode, setCode),
+      or(...numVariants.map(n => eq(schema.scryfallCards.collectorNumber, n))),
+    ))
+    .all();
+
+  if (allMatch.length > 0) {
+    return allMatch.map(parseCard);
+  }
+
+  const likeResult = catalogDb.select(cardFields)
+    .from(schema.scryfallCards)
+    .where(and(
+      NOT_ARENA,
+      eq(schema.scryfallCards.setCode, setCode),
+      or(...numVariants.map(n => like(schema.scryfallCards.collectorNumber, `${n}%`))),
+    ))
+    .orderBy(asc(schema.scryfallCards.collectorNumber))
+    .limit(10)
+    .all();
+
+  return likeResult.map(c => ({
+    ...c,
+    colors: c.colors ? JSON.parse(c.colors) : null,
+    imageUris: localImageUris(c.id, c.imageUris),
+    prices: c.prices ? JSON.parse(c.prices) : null,
+  }));
+}
+
 cardsRouter.get('/find', (req, res) => {
   const q = (req.query.q as string ?? '').trim();
   if (!q) return res.json([]);
@@ -111,43 +151,32 @@ cardsRouter.get('/find', (req, res) => {
 
   const setCode = parsed.set!;
   const rawNum = parsed.num!;
-  const numVariants = [rawNum];
-  const stripped = rawNum.replace(/^0+/, '');
-  if (stripped !== rawNum && stripped.length > 0) numVariants.push(stripped);
+  const result = findBySetNum(setCode, rawNum);
+  if (req.query.counts === '1' && result.length > 0) attachCollectionCounts(result);
+  return res.json(result);
+});
 
-  const allMatch = catalogDb.select(cardFields)
-    .from(schema.scryfallCards)
-    .where(and(
-      NOT_ARENA,
-      eq(schema.scryfallCards.setCode, setCode),
-      or(...numVariants.map(n => eq(schema.scryfallCards.collectorNumber, n))),
-    ))
-    .all();
-
-  if (allMatch.length > 0) {
-    const result = allMatch.map(parseCard);
-    if (req.query.counts === '1') attachCollectionCounts(result);
-    return res.json(result);
+// Batch-resolve many set+number queries (e.g. "vow33") in a single request for
+// the bulk-add importer. Returns a map of query -> matching printings.
+cardsRouter.post('/resolve-bulk', (req, res) => {
+  const raw = req.body?.queries;
+  if (!Array.isArray(raw)) {
+    return res.status(400).json({ error: 'queries must be an array of strings' });
   }
-
-  const likeResult = catalogDb.select(cardFields)
-    .from(schema.scryfallCards)
-    .where(and(
-      NOT_ARENA,
-      eq(schema.scryfallCards.setCode, setCode),
-      or(...numVariants.map(n => like(schema.scryfallCards.collectorNumber, `${n}%`))),
-    ))
-    .orderBy(asc(schema.scryfallCards.collectorNumber))
-    .limit(10)
-    .all();
-
-  const result = likeResult.map(c => ({
-    ...c,
-    colors: c.colors ? JSON.parse(c.colors) : null,
-    imageUris: localImageUris(c.id, c.imageUris),
-    prices: c.prices ? JSON.parse(c.prices) : null,
-  }));
-  if (req.query.counts === '1') attachCollectionCounts(result);
+  const queries = raw.map((q: any) => String(q).trim()).filter(Boolean).slice(0, 300);
+  const result: Record<string, any[]> = {};
+  const seen = new Set<string>();
+  for (const q of queries) {
+    const key = q.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parsed = parseQuery(q);
+    if (parsed.type === 'setnum') {
+      result[key] = findBySetNum(parsed.set!, parsed.num!);
+    } else {
+      result[key] = [];
+    }
+  }
   res.json(result);
 });
 
@@ -269,6 +298,10 @@ cardsRouter.get('/grouped', (req, res) => {
     NOT_ARENA,
     ...tokens.map(t => sql`${nameNoApos} LIKE ${'%' + t.replace(/['"]/g, '') + '%'}`),
   ];
+
+  // Optional "constant set" scoping: restrict results to a single set.
+  const setFilter = (req.query.set as string ?? '').trim().toLowerCase();
+  if (setFilter) conditions.push(eq(schema.scryfallCards.setCode, setFilter));
 
   const colorInclude: string[] = [];
   const colorExclude: string[] = [];

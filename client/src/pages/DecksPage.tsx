@@ -2,11 +2,11 @@ import { useState, useEffect, useMemo, Component, type ReactNode, type CSSProper
 import { useSearchParams } from 'react-router-dom';
 import {
   Title, Group, Text, Card as MCard, SimpleGrid, Modal, Button, TextInput, Checkbox,
-  LoadingOverlay, Box, Paper, Badge, ActionIcon, Tooltip, ScrollArea, Select, Switch, NumberInput, SegmentedControl, Collapse,
+  LoadingOverlay, Box, Paper, Badge, ActionIcon, Tooltip, ScrollArea, Select, Switch, NumberInput, SegmentedControl, Collapse, Stack, Alert,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt, IconUpload, IconExternalLink } from '@tabler/icons-react';
+import { IconPlus, IconTrash, IconPencil, IconSearch, IconCards, IconArrowLeft, IconArchive, IconArrowRight, IconList, IconChevronDown, IconChevronRight, IconGhost, IconFlame, IconCalendarClock, IconBolt, IconUpload, IconExternalLink, IconAlertTriangle } from '@tabler/icons-react';
 import { api, authFetch } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { ScryfallCard, CollectionItem, Location, Condition, GroupedCard } from '../types';
@@ -163,6 +163,7 @@ export default function DecksPage() {
   const [fillOpened, { open: openFill, close: closeFill }] = useDisclosure(false);
   const [pickAddingId, setPickAddingId] = useState<number | null>(null);
   const [schedConfirm, setSchedConfirm] = useState<{ item: CollectionItem; mode: 'now' | 'schedule'; source: 'link' | 'fill' } | null>(null);
+  const [bulkFillConfirm, setBulkFillConfirm] = useState(false);
   const [schedOverwrite, setSchedOverwrite] = useState<{ items: CollectionItem[]; destId: number } | null>(null);
 
   const loadDecks = async () => {
@@ -572,13 +573,16 @@ export default function DecksPage() {
     const deck = selectedDeck;
     const reqs = filteredRequiredCards.filter(r => r.fillItemId == null && selectedReqIds.has(r.id));
     if (!deck || reqs.length === 0) return;
+    setBulkFillConfirm(false);
     const generic = reqs.filter(r => !r.cardId && !(r.setCode && r.collectorNumber));
     if (generic.length > 0) {
-      const names = generic.map(r => `"${r.cardName}"`).join(', ');
+      const shown = generic.slice(0, 4).map(r => `"${r.cardName}"`).join(', ');
+      const more = generic.length > 4 ? ` and ${generic.length - 4} more` : '';
       notifications.show({
-        title: 'Cannot bulk fill',
-        message: `Bulk filling is only supported for specific printings. ${names} ${generic.length > 1 ? 'are' : 'is'} generic (any printing). Fill it individually to pick a printing.`,
-        color: 'red', autoClose: 15000,
+        title: `Cannot bulk fill ${generic.length} generic card${generic.length === 1 ? '' : 's'}`,
+        message: `Bulk filling only works on specific printings. ${generic.length === 1 ? 'The selected card is' : `${generic.length} of the selected cards are`} a generic "any printing" wishlist entry — fill ${generic.length === 1 ? 'it' : 'them'} individually to pick a printing.\n\n${shown}${more}`,
+        color: 'red', autoClose: 10000, withCloseButton: true,
+        styles: { description: { whiteSpace: 'pre-line' } },
       });
       return;
     }
@@ -586,27 +590,10 @@ export default function DecksPage() {
       setCardsLoading(true);
       const res = await api.decks.fillRequiredExternalBulk(deck.id, reqs.map(r => r.id));
       pushUndo(`Filled ${res.results.length} card(s) externally`, async () => {
-        for (const r of res.results) {
-          await api.collection.remove(r.itemId).catch(() => {});
-          const created = await api.decks.addRequired(deck.id, {
-            cardId: r.ghost.cardId ?? undefined,
-            cardName: r.ghost.cardName,
-            setCode: r.ghost.setCode ?? undefined,
-            collectorNumber: r.ghost.collectorNumber ?? undefined,
-            quantity: r.ghost.quantity,
-          }).catch(() => null);
-          if (created?.id) {
-            await api.wantlist.add({
-              cardId: r.ghost.cardId ?? undefined,
-              cardName: r.ghost.cardName,
-              setCode: r.ghost.setCode ?? undefined,
-              collectorNumber: r.ghost.collectorNumber ?? undefined,
-              quantity: r.ghost.quantity,
-              notes: `Wanted for deck: ${deck.name}`,
-              destinationId: deck.locationId,
-              deckRequiredId: created.id,
-            }).catch(() => {});
-          }
+        try {
+          await api.decks.undoFillExternalBulk(deck.id, res.results);
+        } catch (err: any) {
+          notifications.show({ title: 'Undo failed', message: err?.message || 'Could not undo the bulk fill', color: 'red', autoClose: 12000 });
         }
         loadDeckCards(deck.id);
       }, 'Undo bulk fill');
@@ -1170,7 +1157,23 @@ export default function DecksPage() {
             )}
           </Modal>
 
-          <Modal opened={externalOpened} onClose={closeExternal}
+          <Modal opened={bulkFillConfirm} onClose={() => setBulkFillConfirm(false)} title="Bulk fill required cards" size="sm" centered>
+        <Stack gap="md">
+          <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light">
+            This adds <b>{selectedCount}</b> card{(selectedCount ?? 0) === 1 ? '' : 's'} to your collection at the
+            deck's location using default NM condition and autofilled market prices. The ghost wishlist entries are
+            removed. You can undo this afterwards.
+          </Alert>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setBulkFillConfirm(false)}>Cancel</Button>
+            <Button color="green" leftSection={<IconExternalLink size={14} />} onClick={handleBulkFillExternal}>
+              Fill now
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={externalOpened} onClose={closeExternal}
             title={`Add from External — ${externalCard?.name || ''}`} size="sm" centered>
             {externalCard && (
               <Box>
@@ -1399,7 +1402,7 @@ export default function DecksPage() {
                       <Checkbox size="xs" label="Select all" checked={allSelected}
                         indeterminate={someSelected && !allSelected} onChange={toggleSelectAll} />
                       <Button size="compact-xs" variant="light" color="green" leftSection={<IconExternalLink size={12} />}
-                        disabled={selectedCount === 0} onClick={handleBulkFillExternal}>
+                        disabled={selectedCount === 0} onClick={() => setBulkFillConfirm(true)}>
                         Fill externally ({selectedCount})
                       </Button>
                     </Group>

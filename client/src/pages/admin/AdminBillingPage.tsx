@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Title, Group, Button, Table, Badge, Modal, Stack, Text, Textarea, Alert, ActionIcon, Paper, NumberInput, Box, SimpleGrid, Code,
+  Title, Group, Button, Table, Badge, Modal, Stack, Text, Textarea, Alert, ActionIcon, Paper, NumberInput, Box, SimpleGrid, Code, TextInput, SegmentedControl,
 } from '@mantine/core';
 import { Calendar } from '@mantine/dates';
 import { notifications } from '@mantine/notifications';
-import { IconCoin, IconRefresh, IconPencil, IconAlertCircle, IconCheck } from '@tabler/icons-react';
+import { IconCoin, IconRefresh, IconPencil, IconAlertCircle, IconCheck, IconSearch, IconChevronUp, IconChevronDown } from '@tabler/icons-react';
 import { api } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -46,6 +46,37 @@ const fmtDate = (d: Date): string =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 const strToDate = (s: string | null): Date | null => (s ? new Date(s + 'T00:00:00') : null);
+
+// Milliseconds until the account's valid-until date. null = no expiry (e.g. complimentary).
+function remainingMs(u: BillingUser, now: number): number | null {
+  if (!u.paidUntil) return null;
+  const end = new Date(u.paidUntil + 'T23:59:59');
+  const endTime = end.getTime();
+  if (Number.isNaN(endTime)) return null;
+  return endTime - now;
+}
+
+function formatRemaining(ms: number | null): string {
+  if (ms === null) return 'Unlimited';
+  if (ms <= 0) {
+    const days = Math.ceil(-ms / 86400000);
+    return days > 0 ? `Expired ${days}d ago` : 'Expired today';
+  }
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  const minutes = Math.floor((ms % 3600000) / 60000);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${Math.max(minutes, 1)}m`;
+}
+
+function remainingColor(ms: number | null): string {
+  if (ms === null) return 'gray';
+  if (ms <= 0) return 'red';
+  if (ms < 3 * 86400000) return 'orange';
+  if (ms < 14 * 86400000) return 'yellow';
+  return 'green';
+}
 
 // Last day of the month that is (months) months after the received month.
 // e.g. anchor in April, 1 month -> end of April; 2 months -> end of May.
@@ -96,6 +127,21 @@ export default function AdminBillingPage() {
   const [trialWeeks, setTrialWeeks] = useState<number>(4);
   const [editNotes, setEditNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
+  const [sortKey, setSortKey] = useState<'username' | 'paymentRef' | 'tier' | 'remaining'>('remaining');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  const toggleSort = (k: 'username' | 'paymentRef' | 'tier' | 'remaining') => {
+    if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('asc'); }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,6 +214,30 @@ export default function AdminBillingPage() {
     acc[t] = users.filter(u => tierOf(u) === t).length;
     return acc;
   }, { trial: 0, complimentary: 0, basic: 0, pro: 0 });
+
+  const enabledCount = users.filter(u => !u.disabled).length;
+  const disabledCount = users.length - enabledCount;
+
+  const visibleUsers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = users.filter(u => {
+      if (statusFilter === 'enabled' && u.disabled) return false;
+      if (statusFilter === 'disabled' && !u.disabled) return false;
+      if (!q) return true;
+      return u.username.toLowerCase().includes(q)
+        || (u.displayName?.toLowerCase().includes(q) ?? false)
+        || (u.paymentRef?.toLowerCase().includes(q) ?? false);
+    });
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'username') cmp = a.username.localeCompare(b.username);
+      else if (sortKey === 'paymentRef') cmp = (a.paymentRef ?? '').localeCompare(b.paymentRef ?? '');
+      else if (sortKey === 'tier') cmp = TIERS.indexOf(tierOf(a)) - TIERS.indexOf(tierOf(b));
+      else cmp = (remainingMs(a, now) ?? Infinity) - (remainingMs(b, now) ?? Infinity);
+      return cmp * dir;
+    });
+  }, [users, query, statusFilter, sortKey, sortDir, now]);
 
   const renderDay = (date: Date) => {
     const isTrial = editTier === 'trial';
@@ -250,27 +320,71 @@ export default function AdminBillingPage() {
         <Button variant="default" leftSection={<IconRefresh size={16} />} onClick={load} loading={loading}>Refresh</Button>
       </Group>
 
+      <Group gap="md" wrap="nowrap" align="center">
+        <TextInput
+          leftSection={<IconSearch size={16} />}
+          placeholder="Search by name or reference"
+          value={query}
+          onChange={e => setQuery(e.currentTarget.value)}
+          style={{ flex: 1 }}
+          size="sm"
+        />
+        <SegmentedControl
+          size="sm"
+          value={statusFilter}
+          onChange={v => setStatusFilter(v as 'all' | 'enabled' | 'disabled')}
+          data={[
+            { label: 'All', value: 'all' },
+            { label: 'Enabled', value: 'enabled' },
+            { label: 'Disabled', value: 'disabled' },
+          ]}
+        />
+      </Group>
+
       <Alert icon={<IconAlertCircle size={16} />} color="blue" variant="light">
         Membership tiers: <b>{counts.trial}</b> trial, <b>{counts.complimentary}</b> complimentary,{' '}
-        <b>{counts.basic}</b> basic, <b>{counts.pro}</b> pro — across {users.length} user{(users.length === 1 ? '' : 's')}.
+        <b>{counts.basic}</b> basic, <b>{counts.pro}</b> pro — {enabledCount} enabled, {disabledCount} disabled.
       </Alert>
 
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>User</Table.Th>
-            <Table.Th>Reference</Table.Th>
-            <Table.Th>Tier</Table.Th>
+            {([
+              ['username', 'User'],
+              ['paymentRef', 'Reference'],
+              ['tier', 'Tier'],
+            ] as const).map(([k, label]) => (
+              <Table.Th key={k} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+                onClick={() => toggleSort(k)}>
+                <Group gap={4} wrap="nowrap">
+                  {label}
+                  {sortKey === k && (sortDir === 'asc' ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />)}
+                </Group>
+              </Table.Th>
+            ))}
             <Table.Th>Paid on</Table.Th>
             <Table.Th>Credit</Table.Th>
-            <Table.Th>Valid until</Table.Th>
+            <Table.Th style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => toggleSort('remaining')}>
+              <Group gap={4} wrap="nowrap">
+                Valid until
+                {sortKey === 'remaining' && (sortDir === 'asc' ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />)}
+              </Group>
+            </Table.Th>
             <Table.Th>Notes</Table.Th>
             <Table.Th ta="right">Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {users.map(u => {
+          {visibleUsers.length === 0 ? (
+            <Table.Tr>
+              <Table.Td colSpan={8}>
+                <Text size="sm" c="dimmed" ta="center" py="sm">No users match this filter.</Text>
+              </Table.Td>
+            </Table.Tr>
+          ) : visibleUsers.map(u => {
             const meta = TIER_META[tierOf(u)];
+            const rem = remainingMs(u, now);
+            const urgent = rem !== null && rem < 7 * 86400000;
             return (
               <Table.Tr key={u.id} opacity={u.disabled ? 0.5 : 1}>
                 <Table.Td>
@@ -301,7 +415,16 @@ export default function AdminBillingPage() {
                         : <Text size="sm" c="dimmed">—</Text>)}
                 </Table.Td>
                 <Table.Td>
-                  {u.paidUntil ? <Text size="sm" tt="nowrap">{u.paidUntil}</Text> : <Text size="sm" c="dimmed">—</Text>}
+                  {u.paidUntil ? (
+                    <>
+                      <Text size="sm" tt="nowrap">{u.paidUntil}</Text>
+                      <Text size="xs" c={remainingColor(rem)} fw={urgent ? 600 : 400}>
+                        {formatRemaining(rem)}
+                      </Text>
+                    </>
+                  ) : (
+                    <Badge size="xs" variant="light" color="gray">Unlimited</Badge>
+                  )}
                 </Table.Td>
                 <Table.Td>
                   {u.billingNotes ? (

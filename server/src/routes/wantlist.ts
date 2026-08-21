@@ -155,13 +155,14 @@ wantlistRouter.get('/', (req, res) => {
 });
 
 wantlistRouter.post('/', (req, res) => {
-  const { cardId, cardName, setCode, collectorNumber, foil, condition, notes, destinationId, collectionGoalId, persistent, deckRequiredId } = req.body;
+  const { cardId, cardName, setCode, collectorNumber, foil, condition, notes, destinationId, collectionGoalId, persistent, deckRequiredId, quantity } = req.body;
   if (!cardName) return res.status(400).json({ error: 'cardName is required' });
   try {
+    const qty = Math.max(1, Number(quantity) || 1);
     const item = db.insert(schema.wantlistItems)
       .values({
         cardId: cardId ?? null, cardName, setCode: setCode ?? null, collectorNumber: collectorNumber ?? null,
-        foil: foil ? 1 : 0, condition: condition ?? null, quantity: 1, notes: notes ?? null,
+        foil: foil ? 1 : 0, condition: condition ?? null, quantity: qty, notes: notes ?? null,
         destinationId: destinationId ?? null,
         collectionGoalId: collectionGoalId ?? null,
         deckRequiredId: deckRequiredId ?? null,

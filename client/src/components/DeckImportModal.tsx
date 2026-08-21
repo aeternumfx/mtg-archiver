@@ -3,7 +3,7 @@ import {
   Modal, TextInput, Select, Textarea, SegmentedControl, Button, Group, Text, FileInput, Badge, Progress, Box,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconUpload, IconFileText } from '@tabler/icons-react';
+import { IconUpload, IconFileText, IconLink } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { DECK_TYPES } from './DeckFormModal';
 
@@ -24,7 +24,9 @@ export function DeckImportModal({ opened, onClose, onImported }: {
   const [name, setName] = useState('');
   const [deckType, setDeckType] = useState('custom');
   const [content, setContent] = useState('');
-  const [source, setSource] = useState<'paste' | 'upload'>('paste');
+  const [source, setSource] = useState<'paste' | 'upload' | 'url'>('paste');
+  const [url, setUrl] = useState('');
+  const [specificPrintings, setSpecificPrintings] = useState(true);
   const [file, setFile] = useState<File | null>(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -35,6 +37,8 @@ export function DeckImportModal({ opened, onClose, onImported }: {
       setDeckType('custom');
       setContent('');
       setSource('paste');
+      setUrl('');
+      setSpecificPrintings(true);
       setFile(null);
       setImporting(false);
       setProgress(0);
@@ -62,6 +66,31 @@ export function DeckImportModal({ opened, onClose, onImported }: {
   const handleImport = async () => {
     if (!name.trim()) {
       notifications.show({ title: 'No name', message: 'Give the deck a name first', color: 'yellow', autoClose: 8000 });
+      return;
+    }
+    if (source === 'url') {
+      if (!url.trim()) {
+        notifications.show({ title: 'No URL', message: 'Enter a deck URL (e.g. Archidekt or Moxfield)', color: 'yellow', autoClose: 8000 });
+        return;
+      }
+      setImporting(true);
+      setProgress(4);
+      try {
+        const result = await api.decks.importFromUrl({ name: name.trim(), deckType, url: url.trim(), specificPrintings });
+        setProgress(100);
+        onImported(result as DeckImportResult);
+      } catch (err: any) {
+        notifications.show({
+          title: 'Import failed',
+          message: err?.body?.error || err?.message || 'Something went wrong',
+          color: 'red',
+          autoClose: 15000,
+          withCloseButton: true,
+        });
+      } finally {
+        setImporting(false);
+        setProgress(0);
+      }
       return;
     }
     if (!content.trim()) {
@@ -102,11 +131,41 @@ export function DeckImportModal({ opened, onClose, onImported }: {
       <Select label="Deck type" data={DECK_TYPES} value={deckType} onChange={v => setDeckType(v || 'custom')} mb="sm" />
 
       <Text size="sm" fw={500} mb={4}>Source</Text>
-      <SegmentedControl fullWidth mb="sm" value={source} onChange={v => setSource(v as 'paste' | 'upload')}
+      <SegmentedControl fullWidth mb="sm" value={source} onChange={v => setSource(v as 'paste' | 'upload' | 'url')}
         data={[
           { value: 'paste', label: 'Paste decklist' },
           { value: 'upload', label: 'Upload CSV' },
+          { value: 'url', label: 'Deck URL' },
         ]} />
+
+      {source === 'url' && (
+        <TextInput
+          label="Deck URL"
+          placeholder="https://archidekt.com/decks/20526189/azoola"
+          description="Archidekt and Moxfield deck links are supported."
+          value={url}
+          onChange={e => setUrl(e.currentTarget.value)}
+          leftSection={<IconLink size={14} />}
+          mb="sm"
+          required
+        />
+      )}
+
+      {source === 'url' && (
+        <Box mb="sm">
+          <Text size="sm" fw={500} mb={4}>Printings</Text>
+          <SegmentedControl fullWidth size="sm" value={specificPrintings ? 'specific' : 'any'}
+            onChange={v => setSpecificPrintings(v === 'specific')}
+            data={[
+              { value: 'specific', label: 'Specific printings' },
+              { value: 'any', label: 'Any printing' },
+            ]} />
+          <Text size="xs" c="dimmed" mt={4}>
+            Specific printings uses the exact set + collector number from the deck source when available; any
+            printing imports by card name only.
+          </Text>
+        </Box>
+      )}
 
       {source === 'upload' && (
         <FileInput
@@ -121,17 +180,19 @@ export function DeckImportModal({ opened, onClose, onImported }: {
         />
       )}
 
-      <Textarea
-        label="Decklist"
-        description={source === 'upload' ? 'File contents (you can edit before importing).' : 'Paste a decklist or a CSV export from Archidekt / Moxfield.'}
-        value={content}
-        onChange={e => { setContent(e.currentTarget.value); if (file) setFile(null); }}
-        placeholder={
-          'Plain text format:\n1x Sword of Truth and Justice (h1r) 32 *F*\n2x Arcane Signet\nSol Ring x4\nGaea\'s Cradle\n\nUse any number of cards (the cards must exist in the card database to import).\n\nSection headers (e.g. //Commander, //Main, //Maybeboard) are ignored; Commander / Partner / Background sections set those roles.\n\nOr paste a CSV:\nCard,Set Code,Collector #,Quantity,Tags\nSol Ring,JMP,98,1,Commander\n...'
-        }
-        autosize minRows={9} maxRows={16}
-        mb="xs"
-      />
+      {source !== 'url' && (
+        <Textarea
+          label="Decklist"
+          description={source === 'upload' ? 'File contents (you can edit before importing).' : 'Paste a decklist or a CSV export from Archidekt / Moxfield.'}
+          value={content}
+          onChange={e => { setContent(e.currentTarget.value); if (file) setFile(null); }}
+          placeholder={
+            'Plain text format:\n1x Sword of Truth and Justice (h1r) 32 *F*\n2x Arcane Signet\nSol Ring x4\nGaea\'s Cradle\n\nUse any number of cards (the cards must exist in the card database to import).\n\nSection headers (e.g. //Commander, //Main, //Maybeboard) are ignored; Commander / Partner / Background sections set those roles.\n\nOr paste a CSV:\nCard,Set Code,Collector #,Quantity,Tags\nSol Ring,JMP,98,1,Commander\n...'
+          }
+          autosize minRows={9} maxRows={16}
+          mb="xs"
+        />
+      )}
 
       <Group justify="space-between" mb="md">
         <Text size="xs" c="dimmed">
@@ -150,7 +211,12 @@ export function DeckImportModal({ opened, onClose, onImported }: {
 
       <Group justify="flex-end">
         <Button variant="default" onClick={onClose} disabled={importing}>Cancel</Button>
-        <Button loading={importing} disabled={!name.trim() || !content.trim() || importing} onClick={handleImport} leftSection={source === 'upload' ? <IconUpload size={14} /> : undefined}>
+        <Button
+          loading={importing}
+          disabled={!name.trim() || (source === 'url' ? !url.trim() : !content.trim()) || importing}
+          onClick={handleImport}
+          leftSection={source === 'upload' ? <IconUpload size={14} /> : source === 'url' ? <IconLink size={14} /> : undefined}
+        >
           Import
         </Button>
       </Group>

@@ -65,14 +65,17 @@ authRouter.post('/login', loginLimiter, (req, res) => {
   }
 
   const user = getUserByUsername(username);
-  if (!user || user.disabled) {
+  if (!user) {
     // Burn equal time for a missing user as for a wrong password so we don't
     // leak which usernames exist via response timing.
-    if (!user) verifyDummyPassword(password);
+    verifyDummyPassword(password);
     return res.status(401).json({ error: 'Invalid username or password' });
   }
   if (!verifyPassword(password, getUserPasswordHash(user.id))) {
     return res.status(401).json({ error: 'Invalid username or password' });
+  }
+  if (user.disabled) {
+    return res.status(403).json({ error: 'Your account has been disabled.', code: 'ACCOUNT_DISABLED' });
   }
 
   const { token } = createSession(user.id);

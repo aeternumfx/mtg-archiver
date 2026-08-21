@@ -62,20 +62,22 @@ function isBackgroundCard(typeLine: string | null, oracleText: string | null): b
   return (!!typeLine && /background/i.test(typeLine)) || (!!oracleText && /choose a background/i.test(oracleText));
 }
 
-decksRouter.post('/import', (req, res) => {
-  const { name, description, deckType, content, format } = req.body || {};
-  const deckName = (name || '').trim();
-  if (!deckName) return res.status(400).json({ error: 'Name is required' });
-  if (typeof content !== 'string' || !content.trim()) return res.status(400).json({ error: 'No decklist content provided' });
-  if (content.length > 1_000_000) return res.status(413).json({ error: 'Decklist is too large' });
+type ImportResult =
+  | { ok: true; status: number; body: any }
+  | { ok: false; status: number; body: any };
+
+function performImport(deckName: string, description: string | null, deckType: string, content: string, format: 'auto' | 'csv' | 'text'): ImportResult {
+  if (!deckName) return { ok: false, status: 400, body: { error: 'Name is required' } };
+  if (typeof content !== 'string' || !content.trim()) return { ok: false, status: 400, body: { error: 'No decklist content provided' } };
+  if (content.length > 1_000_000) return { ok: false, status: 413, body: { error: 'Decklist is too large' } };
 
   let entries: DeckImportEntry[];
   try {
     entries = parseDecklist(content, format);
   } catch (err: any) {
-    return res.status(400).json({ error: `Could not parse decklist: ${err.message}` });
+    return { ok: false, status: 400, body: { error: `Could not parse decklist: ${err.message}` } };
   }
-  if (entries.length === 0) return res.status(400).json({ error: 'No cards found in the decklist' });
+  if (entries.length === 0) return { ok: false, status: 400, body: { error: 'No cards found in the decklist' } };
 
   try {
     // Validate every card actually exists in the catalog before creating anything.
@@ -92,10 +94,7 @@ decksRouter.post('/import', (req, res) => {
     if (unknown.length > 0) {
       const shown = unknown.slice(0, 8).join(', ');
       const more = unknown.length > 8 ? ` and ${unknown.length - 8} more` : '';
-      return res.status(400).json({
-        error: `Could not find ${unknown.length} card(s) in the card database: ${shown}${more}. No cards were imported.`,
-        unknown,
-      });
+      return { ok: false, status: 400, body: { error: `Could not find ${unknown.length} card(s) in the card database: ${shown}${more}. No cards were imported.`, unknown } };
     }
 
     const result = sqlite.transaction(() => {
@@ -205,15 +204,123 @@ decksRouter.post('/import', (req, res) => {
       return { deck: finalDeck!, loc, importedQuantity, uniqueCards: entries.length, commanders: zoneCards.map(c => c.cardName) };
     })();
 
-    res.status(201).json({
+    return { ok: true, status: 201, body: {
       deck: { ...result.deck, cardCount: 0, locationId: result.loc?.id ?? null },
       importedCards: result.importedQuantity,
       uniqueCards: result.uniqueCards,
       commanders: result.commanders,
-    });
+    } };
   } catch (err: any) {
-    fail(res, err);
+    return { ok: false, status: 400, body: { error: err?.message || 'Import failed' } };
   }
+}
+
+decksRouter.post('/import', (req, res) => {
+  const { name, description, deckType, content, format } = req.body || {};
+  const r = performImport(
+    String(name ?? '').trim(),
+    description ?? null,
+    deckType ?? 'custom',
+    content ?? '',
+    (format ?? 'auto') as 'auto' | 'csv' | 'text',
+  );
+  return res.status(r.status).json(r.body);
+});
+
+// Fetches a decklist from a remote URL: Archidekt and Moxfield are converted
+// from their APIs into the plain decklist format; anything else is fetched as-is.
+// When `specificPrintings` is set, known set + collector numbers are included.
+async function fetchDecklistFromUrl(raw: string, specificPrintings: boolean): Promise<string> {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error('That does not look like a valid URL');
+  }
+  const host = u.host.toLowerCase();
+
+  if (host.includes('archidekt')) {
+    const m = raw.match(/\/decks\/(\d+)/);
+    if (!m) throw new Error('Could not find an Archidekt deck id in that URL');
+    const resp = await fetch(`https://archidekt.com/api/decks/${m[1]}/`);
+    if (!resp.ok) throw new Error(`Archidekt returned ${resp.status}`);
+    const data = await resp.json();
+    const cards: any[] = Array.isArray(data?.cards) ? data.cards : [];
+    const boards = new Map<string, string[]>();
+    const alloc = (header: string) => {
+      if (!boards.has(header)) boards.set(header, []);
+      return boards.get(header)!;
+    };
+    for (const c of cards) {
+      const name = c?.card?.oracleCard?.name || c?.card?.name;
+      const qty = Number(c?.quantity) || 1;
+      if (!name) continue;
+      const cats = (Array.isArray(c?.categories) ? c.categories : []).map((x: any) => String(x).toLowerCase());
+      let header: string;
+      if ((cats as string[]).some(s => /^commander/i.test(s))) header = 'Commander';
+      else if ((cats as string[]).some(s => /^partner/i.test(s))) header = 'Partner';
+      else if ((cats as string[]).some(s => /^background/i.test(s))) header = 'Background';
+      else if ((cats as string[]).some(s => /maybeboard|sideboard/i.test(s))) header = 'Maybeboard';
+      else header = 'Mainboard';
+      const setCode = c?.card?.edition?.editioncode;
+      const collector = c?.card?.collectorNumber;
+      const suffix = specificPrintings && setCode && collector ? ` (${String(setCode).toUpperCase()}) ${collector}` : '';
+      alloc(header).push(`${qty} ${name}${suffix}`);
+    }
+    if (boards.size === 0) throw new Error('Archidekt deck had no recognizable cards');
+    const lines: string[] = [];
+    for (const [header, cardLines] of boards) {
+      lines.push(`//${header}`);
+      lines.push(...cardLines);
+    }
+    return lines.join('\n');
+  }
+
+  if (host.includes('moxfield')) {
+    const m = raw.match(/\/decks\/([a-zA-Z0-9_-]+)/);
+    if (!m) throw new Error('Could not find a Moxfield deck id in that URL');
+    const resp = await fetch(`https://api.moxfield.com/v2/decks/all/${m[1]}`);
+    if (!resp.ok) throw new Error(`Moxfield returned ${resp.status}`);
+    const data = await resp.json();
+    const lines: string[] = [];
+    const pushBoard = (label: string, board: Record<string, { quantity?: number | string }> | undefined) => {
+      if (!board) return;
+      const entries = Object.entries(board);
+      if (entries.length === 0) return;
+      lines.push(`//${label}`);
+      for (const [name, entry] of entries) {
+        lines.push(`${Number(entry?.quantity) || 1} ${name}`);
+      }
+    };
+    pushBoard('Commander', data?.commander);
+    pushBoard('Mainboard', data?.mainboard);
+    pushBoard('Sideboard', data?.sideboard);
+    pushBoard('Maybe Board', data?.maybe_board);
+    if (lines.length === 0) throw new Error('Moxfield deck had no recognizable cards');
+    return lines.join('\n');
+  }
+
+  // Generic: treat the URL's body as a plain decklist.
+  const resp = await fetch(raw, { headers: { 'user-agent': 'mtg-archiver' } });
+  if (!resp.ok) throw new Error(`URL returned ${resp.status}`);
+  const text = await resp.text();
+  if (text.length > 1_000_000) throw new Error('Decklist from URL is too large');
+  return text;
+}
+
+decksRouter.post('/import-url', (req, res) => {
+  const { name, description, deckType, url, specificPrintings } = req.body || {};
+  const deckName = String(name ?? '').trim();
+  if (!deckName) return res.status(400).json({ error: 'Name is required' });
+  if (typeof url !== 'string' || !url.trim()) return res.status(400).json({ error: 'A deck URL is required' });
+  fetchDecklistFromUrl(url.trim(), specificPrintings !== false)
+    .then(content => {
+      const r = performImport(deckName, description ?? null, deckType ?? 'custom', content, 'auto');
+      return res.status(r.status).json(r.body);
+    })
+    .catch((err: any) =>
+      res.status(502).json({ error: `Could not fetch decklist from that URL: ${err.message}` })
+    );
 });
 
 decksRouter.get('/', (_req, res) => {
@@ -883,9 +990,10 @@ decksRouter.post('/:id/required/fill-external-bulk', (req, res) => {
     }
     const generic = ghosts.filter((g: any) => !g.cardId && !(g.setCode && g.collectorNumber));
     if (generic.length > 0) {
-      const names = generic.map((g: any) => `"${g.cardName}"`).join(', ');
+      const shown = generic.slice(0, 4).map((g: any) => `"${g.cardName}"`).join(', ');
+      const more = generic.length > 4 ? ` and ${generic.length - 4} more` : '';
       return res.status(400).json({
-        error: `Bulk filling is only supported for specific printings. ${names} ${generic.length > 1 ? 'are' : 'is'} generic (any printing). Fill it individually to pick a printing.`,
+        error: `Bulk filling only works on specific printings. ${generic.length} of the selected card(s) are generic "any printing" wishlist entries — fill them individually to pick a printing.${shown ? ` (${shown}${more})` : ''}`,
       });
     }
 
@@ -905,6 +1013,67 @@ decksRouter.post('/:id/required/fill-external-bulk', (req, res) => {
         };
       }),
     });
+  } catch (err: any) {
+    fail(res, err, typeof err?.status === 'number' ? err.status : 500);
+  }
+});
+
+// Atomically reverse a bulk fill: delete the created collection copies, restore
+// the ghost (required card + wantlist) rows, and clear any command-zone bindings
+// that pointed at the removed copies.
+decksRouter.post('/:id/required/undo-fill-bulk', (req, res) => {
+  const deckId = Number(req.params.id);
+  const raw = req.body?.results;
+  const results = Array.isArray(raw) ? raw : [];
+  if (results.length === 0) return res.status(400).json({ error: 'No results provided' });
+  try {
+    sqlite.transaction(() => {
+      const deck = db.select().from(schema.decks).where(eq(schema.decks.id, deckId)).get();
+      const deckLoc = getDeckLocation(deckId);
+      for (const r of results) {
+        const itemId = Number(r?.itemId);
+        const ghost = (r?.ghost ?? {}) as { cardId?: string | null; cardName?: string; setCode?: string | null; collectorNumber?: string | null; quantity?: number };
+        const cardName = String(ghost.cardName ?? '').trim();
+        if (!cardName) continue;
+
+        if (itemId) {
+          if (deck) {
+            const updates: Record<string, any> = {};
+            if (deck.commanderItemId === itemId) updates.commanderItemId = null;
+            if (deck.partnerItemId === itemId) updates.partnerItemId = null;
+            if (deck.backgroundItemId === itemId) updates.backgroundItemId = null;
+            if (Object.keys(updates).length > 0) {
+              db.update(schema.decks).set(updates).where(eq(schema.decks.id, deckId)).run();
+            }
+          }
+          db.delete(schema.collectionItems).where(eq(schema.collectionItems.id, itemId)).run();
+        }
+
+        const created = db.insert(schema.deckRequiredCards)
+          .values({
+            deckId,
+            cardId: ghost.cardId ?? null,
+            cardName,
+            setCode: ghost.setCode ?? null,
+            collectorNumber: ghost.collectorNumber ?? null,
+            quantity: Math.max(1, Number(ghost.quantity) || 1),
+          })
+          .returning().get();
+        db.insert(schema.wantlistItems)
+          .values({
+            cardId: ghost.cardId ?? null,
+            cardName: created.cardName,
+            setCode: created.setCode,
+            collectorNumber: created.collectorNumber,
+            quantity: created.quantity,
+            notes: deck ? `Wanted for deck: ${deck.name}` : 'Wanted for deck',
+            destinationId: deckLoc?.id ?? null,
+            deckRequiredId: created.id,
+          })
+          .run();
+      }
+    })();
+    res.json({ ok: true, message: `${results.length} card(s) restored to ghosts` });
   } catch (err: any) {
     fail(res, err, typeof err?.status === 'number' ? err.status : 500);
   }

@@ -2,10 +2,10 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Title, Group, Text, Image, Badge, Table,
   TextInput, Select, NumberInput, Switch, SegmentedControl,
-  Button, Checkbox, LoadingOverlay, Box, Paper, Collapse, Pagination, Modal,
+  Button, Checkbox, LoadingOverlay, Box, Paper, Collapse, Pagination, Modal, Textarea, Stack, Code, SimpleGrid, Divider,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconSearch, IconPlus } from '@tabler/icons-react';
+import { IconSearch, IconPlus, IconUpload } from '@tabler/icons-react';
 import { api } from '../api/client';
 import { CONDITIONS } from '../types';
 import type { GroupedCard, ScryfallCard, CardResult, Location, Condition, CollectionItem } from '../types';
@@ -49,6 +49,59 @@ const defaultForm = (): PrintingForm => ({
   purchasePrice: '', packOpened: false, proxy: false, misprint: false, altered: false, notes: '',
 });
 
+interface BulkRow {
+  key: string;
+  line: string;
+  amount: number;
+  query: string;
+  foil: boolean;
+  ok: boolean;
+  card: ScryfallCard | null;
+}
+
+// Parses one bulk-add line: optional quantity (with or without "x"), the set +
+// collector number token, and an optional *F* foil marker. e.g.
+//   "1 x vow33 *F*", "1 vow33 *F*", "4 vow42", "1x 2x2 123"
+function parseBulkLine(line: string): { amount: number; query: string; foil: boolean } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  const foil = /\*\s*f\s*\*/i.test(trimmed);
+  const tokens = trimmed.replace(/\*\s*f\s*\*/ig, '').trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+
+  let amount = 1;
+  let rest = tokens.join(' ');
+  const first = tokens[0] ?? '';
+  const xMatch = first.match(/^(\d+)x$/i);
+  if (xMatch) {
+    amount = parseInt(xMatch[1], 10) || 1;
+    rest = tokens.slice(1).join(' ');
+  } else if (/^x$/i.test(first)) {
+    rest = tokens.slice(1).join(' ');
+  } else if (/^\d+$/.test(first) && tokens.length > 1) {
+    if (tokens[1].toLowerCase() === 'x') {
+      amount = parseInt(first, 10) || 1;
+      rest = tokens.slice(2).join(' ');
+    } else {
+      amount = parseInt(first, 10) || 1;
+      rest = tokens.slice(1).join(' ');
+    }
+  }
+
+  rest = rest.trim();
+  if (!rest) return null;
+  if (!/^[a-z0-9 ]+$/i.test(rest)) return null;
+  return { amount: Math.max(1, amount), query: rest, foil };
+}
+
+// Market price used when the user doesn't enter a total price (auto-fill).
+function cardAutoPrice(card: ScryfallCard | null, foil: boolean): number | null {
+  if (!card?.prices) return null;
+  const raw = foil ? card.prices.usd_foil : card.prices.usd;
+  const n = parseFloat(raw || '');
+  return isNaN(n) ? null : n;
+}
+
 function InvalidBubble() {
   return (
     <Box style={{
@@ -65,6 +118,8 @@ function InvalidBubble() {
 
 export default function AddCardsPage() {
   const [query, setQuery] = useState('');
+  const [constEnabled, setConstEnabled] = useState(false);
+  const [constSet, setConstSet] = useState('');
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [showFilters, setShowFilters] = useState(false);
   const [groupedResults, setGroupedResults] = useState<GroupedCard[]>([]);
@@ -83,10 +138,23 @@ export default function AddCardsPage() {
   const [quickForm, setQuickForm] = useState<PrintingForm>(defaultForm());
   const [quickLoc, setQuickLoc] = useState<string | null>(null);
   const [quickDest, setQuickDest] = useState<string | null>(null);
-  const [invalidField, setInvalidField] = useState<'location' | 'price' | null>(null);
+  const [quickWantlist, setQuickWantlist] = useState(false);
+  const [invalidField, setInvalidField] = useState<'location' | 'price' | 'destination' | null>(null);
   const [wantlist, setWantlist] = useState<Array<{ id: number; cardId: string | null; cardName: string; destinationId: number | null; collectionGoalId: number | null; persistent: number }>>([]);
   const [wantConfirm, setWantConfirm] = useState<{ toAdd: Array<[string, PrintingForm]>; entries: WantEntry[]; quick?: boolean } | null>(null);
   const [wantLoc, setWantLoc] = useState<string | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkMode, setBulkMode] = useState<'collection' | 'wantlist'>('collection');
+  const [bulkText, setBulkText] = useState('');
+  const [bulkLoc, setBulkLoc] = useState<string | null>(null);
+  const [bulkDest, setBulkDest] = useState<string | null>(null);
+  const [bulkCondition, setBulkCondition] = useState<Condition>('NM');
+  const [bulkTotal, setBulkTotal] = useState('');
+  const [bulkRows, setBulkRows] = useState<BulkRow[] | null>(null);
+  const [bulkResolving, setBulkResolving] = useState(false);
+  const [bulkAdding, setBulkAdding] = useState(false);
+  const [bulkInvalid, setBulkInvalid] = useState<'location' | 'total' | 'destination' | null>(null);
+  const [bulkPage, setBulkPage] = useState(1);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const quickModalRef = useRef<HTMLDivElement>(null);
@@ -98,6 +166,10 @@ export default function AddCardsPage() {
   const locationsLoaded = useRef(false);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
+  const constEnabledRef = useRef(constEnabled);
+  constEnabledRef.current = constEnabled;
+  const constSetRef = useRef(constSet);
+  constSetRef.current = constSet;
   const { push: pushUndo } = useUndo();
 
   useEffect(() => {
@@ -135,7 +207,16 @@ export default function AddCardsPage() {
   };
 
   const doSearch = useCallback(async (raw: string) => {
-    const q = raw.replace(/[.'"]+/g, '').trim();
+    // With a pinned set code, a bare collector number (digits, optional
+    // trailing letter) is prepended with the set so "42" searches "vow42".
+    let q = raw.replace(/[.'"]+/g, '').trim();
+    const set = constSetRef.current.trim().toLowerCase();
+    if (constEnabledRef.current && set && /^\d+[a-z]?$/i.test(q)) {
+      q = `${set}${q}`;
+      setQuery(raw);
+    } else {
+      setQuery(q);
+    }
     if (!q) { setGroupedResults([]); setExpanded(new Set()); setPrintings({}); setForms({}); return; }
     setLoading(true);
     try {
@@ -178,7 +259,11 @@ export default function AddCardsPage() {
         const singles = names.filter(n => groups[n].length === 1);
         setExpanded(new Set(singles));
       } else {
-        const res = await api.cards.grouped(q, 1, filtersRef.current);
+        const setFilter = constEnabledRef.current ? constSetRef.current.trim().toLowerCase() : '';
+        const res = await api.cards.grouped(
+          q, 1,
+          setFilter ? { ...filtersRef.current, set: setFilter } : filtersRef.current,
+        );
         setGroupedResults(res.data);
         setPrintings({});
         setForms({});
@@ -225,12 +310,49 @@ export default function AddCardsPage() {
     });
   };
 
-  const validateQuick = (): 'location' | 'price' | null => {
+  // CMC filter helper: 0 is a legitimate value (lands, 0-cmc spells); only an
+  // actually-empty field removes the filter. Values are bound to the inputs as
+  // numbers — passing the string "0" would be collapsed to empty by Mantine's
+  // leading-zero trim on blur.
+  const cmcVal = (s: string | undefined): number | string => {
+    if (s === undefined || s === null || s === '') return '';
+    return Number(s);
+  };
+  const setCmcFilter = (key: 'cmcMin' | 'cmcMax', v: number | string | null) => {
+    setFilters(f => {
+      const n = { ...f };
+      if (v === '' || v === null || v === undefined) delete n[key];
+      else n[key] = String(v);
+      return n;
+    });
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => doSearch(query), 300);
+  };
+
+  const wantlistToggleRef = useRef<(on: boolean) => void>(() => {});
+  const quickWantlistRef = useRef(quickWantlist);
+  quickWantlistRef.current = quickWantlist;
+
+  const validateQuick = (): 'location' | 'price' | 'destination' | null => {
+    if (quickWantlist) {
+      return quickDest ? null : 'destination';
+    }
     if (!(quickLoc ?? selectedLoc)) return 'location';
     const p = quickForm.purchasePrice.trim();
     if (p && isNaN(parseFloat(p))) return 'price';
     return null;
   };
+
+  // Wantlist mode: a destination is required. Switching on defaults it to the
+  // current location; switching off clears it if it equals the location.
+  const setWantlistMode = (on: boolean) => {
+    setQuickWantlist(on);
+    const loc = quickLoc ?? selectedLoc;
+    setQuickDest(prev => on
+      ? (prev ?? loc)
+      : (prev === loc ? null : prev));
+  };
+  wantlistToggleRef.current = setWantlistMode;
 
   const handleQuickAdd = async () => {
     const bad = validateQuick();
@@ -240,7 +362,12 @@ export default function AddCardsPage() {
     }
     setInvalidField(null);
     const loc = quickLoc ?? selectedLoc;
-    if (!quickAddCard || !loc) return;
+    if (!quickAddCard) return;
+    if (quickWantlist) {
+      await doQuickWantlist();
+      return;
+    }
+    if (!loc) return;
     const entries = findWantEntries([{ id: quickAddCard.id, name: quickAddCard.name }]);
     if (entries.length > 0) {
       setWantLoc(loc);
@@ -248,6 +375,36 @@ export default function AddCardsPage() {
       return;
     }
     await doQuickAdd();
+  };
+
+  const doQuickWantlist = async () => {
+    if (!quickAddCard) return;
+    const dest = quickDest;
+    if (!dest) { setInvalidField('destination'); return; }
+    setAdding(true);
+    try {
+      await api.wantlist.add({
+        cardId: quickAddCard.id,
+        cardName: quickAddCard.name,
+        setCode: quickAddCard.setCode,
+        collectorNumber: quickAddCard.collectorNumber,
+        foil: quickForm.foil || undefined,
+        condition: quickForm.condition || null,
+        quantity: quickForm.quantity || 1,
+        notes: quickForm.notes.trim() || undefined,
+        destinationId: Number(dest),
+      });
+      const destName = locations.find(l => l.id === Number(dest))?.name || 'destination';
+      notifications.show({ title: 'Added to wantlist', message: `${quickAddCard.name} added to ${destName}`, color: 'green' });
+      setQuickAddCard(null);
+      setGroupedResults([]); setPrintings({}); setForms({}); setExpanded(new Set());
+      setQuery('');
+      searchRef.current?.focus();
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    } finally {
+      setAdding(false);
+    }
   };
 
   const doQuickAdd = async (destOverride?: number | null, locOverride?: string | null) => {
@@ -388,6 +545,11 @@ export default function AddCardsPage() {
 
       if (editing) return;
 
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        wantlistToggleRef.current(!quickWantlistRef.current);
+        return;
+      }
       if (e.key === 'f' || e.key === 'F') {
         const fs = foilState(quickAddCard);
         if (fs.canFoil && !fs.foilOnly) {
@@ -482,6 +644,7 @@ export default function AddCardsPage() {
     }
     const card = cards[0];
     setQuickAddCard(card);
+    setQuickWantlist(false);
     setQuickLoc(selectedLoc);
     setQuickDest(destLoc);
     const fs = foilState(card);
@@ -500,6 +663,14 @@ export default function AddCardsPage() {
       }).catch(() => {});
     }
   }, [selectedLoc]);
+
+  // Wantlist entries must have a destination; default it to Inbox.
+  useEffect(() => {
+    if (bulkMode === 'wantlist' && !bulkDest) {
+      const inbox = locations.find(l => l.name === 'Inbox' || l.builtIn);
+      if (inbox) setBulkDest(String(inbox.id));
+    }
+  }, [bulkMode, bulkDest, locations]);
 
   const toggleExpand = async (name: string) => {
     const next = new Set(expanded);
@@ -705,6 +876,180 @@ export default function AddCardsPage() {
     else doAddAll(c.toAdd, undefined, loc);
   };
 
+  const openBulk = () => {
+    setBulkText('');
+    setBulkRows(null);
+    setBulkTotal('');
+    setBulkCondition('NM');
+    setBulkMode('collection');
+    setBulkLoc(selectedLoc);
+    setBulkDest(destLoc);
+    setBulkInvalid(null);
+    setBulkOpen(true);
+  };
+
+  const runBulkParse = async () => {
+    setBulkInvalid(null);
+    const entries = bulkText.split('\n')
+      .map((ln, i) => {
+        const p = parseBulkLine(ln);
+        if (!p) return null;
+        return { key: `${i}-${p.query}-${p.foil}`, line: ln.trim(), amount: p.amount, query: p.query, foil: p.foil };
+      })
+      .filter(Boolean) as Array<Omit<BulkRow, 'ok' | 'card'>>;
+
+    if (entries.length === 0) {
+      notifications.show({ title: 'Nothing to import', message: 'Enter at least one card line, e.g. 4 vow42', color: 'yellow' });
+      setBulkRows([]);
+      return;
+    }
+
+    setBulkResolving(true);
+    try {
+      const queries = Array.from(new Set(entries.map(e => e.query)));
+      const map = await api.cards.resolveBulk(queries);
+      const rows: BulkRow[] = entries.map(e => {
+        const cards = map[String(e.query).toLowerCase()] ?? [];
+        const card = cards[0] ?? null;
+        return { ...e, ok: !!card, card };
+      });
+      setBulkRows(rows);
+      setBulkPage(1);
+    } catch (err: any) {
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    } finally {
+      setBulkResolving(false);
+    }
+  };
+
+  const doBulkAdd = async () => {
+    if (!bulkRows) return;
+    const rows = bulkRows.filter(r => r.ok);
+    if (rows.length === 0) {
+      notifications.show({ title: 'Nothing to add', message: 'No valid card lines to add.', color: 'yellow' });
+      return;
+    }
+    const failed = bulkRows.filter(r => !r.ok);
+
+    if (bulkMode === 'wantlist') {
+      const dest = bulkDest;
+      if (!dest) { setBulkInvalid('destination'); return; }
+      setBulkAdding(true);
+      let wantAdded = 0;
+      let wantErrors = 0;
+      for (const r of rows) {
+        if (!r.card) continue;
+        try {
+          await api.wantlist.add({
+            cardId: r.card.id,
+            cardName: r.card.name,
+            setCode: r.card.setCode,
+            collectorNumber: r.card.collectorNumber,
+            foil: r.foil || undefined,
+            condition: bulkCondition,
+            quantity: r.amount,
+            destinationId: Number(dest),
+          });
+          wantAdded++;
+        } catch {
+          wantErrors++;
+        }
+      }
+      setBulkAdding(false);
+      if (wantErrors === 0 && wantAdded > 0) {
+        notifications.show({ title: 'Added to wantlist', message: `${wantAdded} card${wantAdded !== 1 ? 's' : ''} added to your wantlist`, color: 'green' });
+        setBulkOpen(false);
+      } else if (wantErrors > 0) {
+        notifications.show({
+          title: 'Added with errors',
+          message: failed.length > 0
+            ? `${wantAdded} added, ${wantErrors} failed, ${failed.length} line(s) unresolved`
+            : `${wantAdded} added, ${wantErrors} failed`,
+          color: 'yellow',
+        });
+      }
+      return;
+    }
+
+    const loc = bulkLoc ?? selectedLoc;
+    if (!loc) { setBulkInvalid('location'); return; }
+
+    const totalRaw = bulkTotal.trim();
+    const totalPrice = totalRaw ? parseFloat(totalRaw) : NaN;
+    if (totalRaw && isNaN(totalPrice)) { setBulkInvalid('total'); return; }
+    setBulkInvalid(null);
+
+    const totalQty = rows.reduce((sum, r) => sum + r.amount, 0);
+    const perCard = (!isNaN(totalPrice) && totalPrice > 0)
+      ? parseFloat((totalPrice / totalQty).toFixed(2))
+      : undefined;
+
+    setBulkAdding(true);
+    const adds: Array<{ item: CollectionItem; created: boolean; qty: number }> = [];
+    let added = 0;
+    let errors = 0;
+    for (const r of rows) {
+      if (!r.card) continue;
+      try {
+        const { item, created } = await api.collection.addDetailed({
+          cardId: r.card.id,
+          locationId: Number(loc),
+          quantity: r.amount,
+          foil: r.foil,
+          condition: bulkCondition,
+          purchasePrice: perCard ?? undefined,
+          destinationId: bulkDest ? Number(bulkDest) : undefined,
+        });
+        adds.push({ item, created, qty: r.amount });
+        added++;
+      } catch {
+        errors++;
+      }
+    }
+    setBulkAdding(false);
+
+    if (errors === 0 && added > 0) {
+      const locName = locations.find(l => l.id === Number(loc))?.name || 'collection';
+      pushUndo(`${added} card${added !== 1 ? 's' : ''} added to ${locName}`, () => undoAdds(adds), 'Undo add');
+      notifications.show({
+        title: 'Added',
+        message: perCard !== undefined
+          ? `${added} card${added !== 1 ? 's' : ''} added at $${perCard.toFixed(2)} each (total $${totalPrice.toFixed(2)})`
+          : `${added} card${added !== 1 ? 's' : ''} added (prices auto-filled)`,
+        color: 'green',
+      });
+      setBulkOpen(false);
+      setGroupedResults([]); setPrintings({}); setForms({}); setExpanded(new Set());
+      setQuery('');
+      searchRef.current?.focus();
+    } else if (errors > 0) {
+      notifications.show({
+        title: 'Added with errors',
+        message: failed.length > 0
+          ? `${added} added, ${errors} failed, ${failed.length} line(s) unresolved`
+          : `${added} added, ${errors} failed`,
+        color: 'yellow',
+      });
+    }
+  };
+
+  const bulkOkRows = bulkRows?.filter(r => r.ok) ?? [];
+  const bulkTotalQty = bulkOkRows.reduce((s, r) => s + r.amount, 0);
+  const bulkDividedPrice = (() => {
+    const t = bulkTotal.trim();
+    if (bulkMode === 'collection' && t && !isNaN(parseFloat(t)) && bulkTotalQty > 0) {
+      return parseFloat((parseFloat(t) / bulkTotalQty).toFixed(2));
+    }
+    return null;
+  })();
+
+  const BULK_PER_PAGE = 25;
+  const bulkPages = bulkRows ? Math.max(1, Math.ceil(bulkRows.length / BULK_PER_PAGE)) : 1;
+  const bulkPageSafe = Math.min(bulkPage, bulkPages);
+  const bulkPageRows = bulkRows
+    ? bulkRows.slice((bulkPageSafe - 1) * BULK_PER_PAGE, bulkPageSafe * BULK_PER_PAGE)
+    : [];
+
   const groupIsAllSelected = (name: string) =>
     printings[name]?.length > 0 && printings[name].every(c => forms[c.id]?.selected);
 
@@ -714,8 +1059,13 @@ export default function AddCardsPage() {
   return (
     <>
       <Group mb="md" justify="space-between">
-        <Title order={2}>Add Cards</Title>
         <Group>
+          <Title order={2}>Add Cards</Title>
+          <Button variant="light" leftSection={<IconUpload size={16} />} onClick={openBulk} data-tour="bulk-add">
+            Bulk add
+          </Button>
+        </Group>
+        <Group wrap="nowrap">
           <Select
             placeholder="Location"
             label="Location"
@@ -738,21 +1088,66 @@ export default function AddCardsPage() {
             label="Default Price ($)"
             value={defaultPrice}
             onChange={e => setDefaultPrice(e.currentTarget.value)}
-            w={100} size="sm"
+            w={140} size="sm"
           />
         </Group>
       </Group>
 
-      <TextInput
-        mb="md"
-        placeholder='Name, set+number (e.g. blb0239), or Scryfall syntax (e.g. s:blb cn:0239)'
-        value={query}
-        onChange={e => handleQueryChange(e.currentTarget.value)}
-        onKeyDown={handleKeyDown}
-        leftSection={<IconSearch size={16} />}
-        ref={searchRef}
-        data-tour="add-search"
-      />
+      <Box mb="md">
+        {constEnabled ? (
+          <Group gap="xs" mb="sm" align="flex-end">
+            <TextInput
+              label="Set"
+              placeholder="e.g. vow"
+              value={constSet}
+              onChange={e => {
+                const v = e.currentTarget.value.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+                setConstSet(v);
+                constSetRef.current = v;
+                if (query.trim()) handleQueryChange(query);
+              }}
+              leftSection={<IconSearch size={16} />}
+              w={130} size="sm"
+            />
+            <TextInput
+              label="Collector number / card name"
+              placeholder='e.g. 33, 42a, or card name'
+              value={query}
+              onChange={e => handleQueryChange(e.currentTarget.value)}
+              onKeyDown={handleKeyDown}
+              leftSection={<Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>{constSet ? `${constSet} ` : ''}</Text>}
+              style={{ flex: 1 }}
+              ref={searchRef}
+              data-tour="add-search"
+            />
+          </Group>
+        ) : (
+          <TextInput
+            mb="sm"
+            label="Search"
+            placeholder='Name, set+number (e.g. blb0239), or Scryfall syntax (e.g. s:blb cn:0239)'
+            value={query}
+            onChange={e => handleQueryChange(e.currentTarget.value)}
+            onKeyDown={handleKeyDown}
+            leftSection={<IconSearch size={16} />}
+            ref={searchRef}
+            data-tour="add-search"
+          />
+        )}
+        <Group gap="xs">
+          <Switch
+            size="xs"
+            label="Constant set code"
+            checked={constEnabled}
+            onChange={e => {
+              const on = e.currentTarget.checked;
+              setConstEnabled(on);
+              constEnabledRef.current = on;
+              handleQueryChange(query);
+            }}
+          />
+        </Group>
+      </Box>
 
       <Group mb="sm" gap="xs">
         <Button size="compact-sm" variant={showFilters ? 'filled' : 'light'} onClick={() => setShowFilters(!showFilters)}>
@@ -781,7 +1176,7 @@ export default function AddCardsPage() {
               const val = filters[key];
               const isInc = val === 'include';
               const isExc = val === 'exclude';
-              const border = isExc ? '3px solid #cc0000' : isInc ? '2px solid var(--mantine-color-blue-5)' : '2px solid transparent';
+              const border = isExc ? '2px solid #cc0000' : isInc ? '2px solid var(--mantine-color-blue-5)' : '2px solid transparent';
               const opacity = isExc ? 0.3 : isInc ? 1 : 0.5;
               return (
                 <Box
@@ -834,19 +1229,13 @@ export default function AddCardsPage() {
           <Group gap="sm" mb="sm" align="flex-end">
             <div>
               <Text size="xs" fw={600} mb={2}>CMC Min</Text>
-              <NumberInput value={filters.cmcMin ?? ''} onChange={v => {
-                setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.cmcMin = String(v); else delete n.cmcMin; return n; });
-                if (debounceRef.current) clearTimeout(debounceRef.current);
-                debounceRef.current = setTimeout(() => doSearch(query), 300);
-              }} min={0} max={20} w={70} size="xs" />
+              <NumberInput value={cmcVal(filters.cmcMin)} onChange={v => setCmcFilter('cmcMin', v)}
+                min={0} max={20} w={70} size="xs" />
             </div>
             <div>
               <Text size="xs" fw={600} mb={2}>CMC Max</Text>
-              <NumberInput value={filters.cmcMax ?? ''} onChange={v => {
-                setFilters(f => { const n = { ...f }; if (v !== '' && v !== null) n.cmcMax = String(v); else delete n.cmcMax; return n; });
-                if (debounceRef.current) clearTimeout(debounceRef.current);
-                debounceRef.current = setTimeout(() => doSearch(query), 300);
-              }} min={0} max={20} w={70} size="xs" />
+              <NumberInput value={cmcVal(filters.cmcMax)} onChange={v => setCmcFilter('cmcMax', v)}
+                min={0} max={20} w={70} size="xs" />
             </div>
             <div>
               <Text size="xs" fw={600} mb={2}>Rarity</Text>
@@ -1115,11 +1504,11 @@ export default function AddCardsPage() {
         )}
       </Box>
 
-      <Modal opened={!!quickAddCard} onClose={() => setQuickAddCard(null)} title="Quick Add" size="md" centered closeOnEscape={false}>
+      <Modal opened={!!quickAddCard} onClose={() => setQuickAddCard(null)} title="Quick Add" size="lg" centered closeOnEscape={false}>
         {quickAddCard && (
           <Box ref={quickModalRef}>
-            <Group gap="lg" mb="md" wrap="nowrap" align="flex-start">
-              <Box w={265} h={370} style={{ overflow: 'hidden', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', position: 'relative' }}>
+            <Group gap="lg" align="flex-start" wrap="nowrap">
+              <Box w={250} h={349} style={{ overflow: 'hidden', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a2e', position: 'relative', flexShrink: 0 }}>
                 <img
                   src={quickAddCard.imageUris?.large || quickAddCard.imageUris?.normal || quickAddCard.imageUris?.small
                     || quickAddCard.cardFaces?.[0]?.image_uris?.large || quickAddCard.cardFaces?.[0]?.image_uris?.normal || ''}
@@ -1136,62 +1525,94 @@ export default function AddCardsPage() {
                   }} />
                 )}
               </Box>
-              <div style={{ flex: 1 }}>
-                <Text fw={600} size="lg">{quickAddCard.name}</Text>
-                <Group gap={4} mt={4}>
-                  <SetSymbol code={quickAddCard.setCode} name={quickAddCard.setName} />
-                  <Text size="sm" c="dimmed">#{quickAddCard.collectorNumber}</Text>
+
+              <Stack gap="sm" style={{ flex: 1, minWidth: 0 }}>
+                <div>
+                  <Group gap={6} wrap="nowrap" mb={2}>
+                    <SetSymbol code={quickAddCard.setCode} name={quickAddCard.setName} />
+                    <Text fw={600} size="lg" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {quickAddCard.name}
+                    </Text>
+                  </Group>
+                  <Group gap={6}>
+                    <Text size="sm" c="dimmed">#{quickAddCard.collectorNumber}</Text>
+                    {quickAddCard.typeLine && <Text size="xs" c="dimmed">· {quickAddCard.typeLine}</Text>}
+                  </Group>
+                  <Group gap={4} mt={4}><Tags card={quickAddCard} /></Group>
+                  <Text size="xs" mt="sm">
+                    Market: <b>${parseFloat(quickForm.foil ? (quickAddCard.prices?.usd_foil || '0') : (quickAddCard.prices?.usd || '0')).toFixed(2)}</b>
+                    {quickAddCard.prices?.usd && !quickForm.foil && quickAddCard.prices?.usd_foil ? ` / Foil: $${parseFloat(quickAddCard.prices.usd_foil).toFixed(2)}` : ''}
+                    {quickAddCard.prices?.usd && quickForm.foil ? ` / Nonfoil: $${parseFloat(quickAddCard.prices.usd).toFixed(2)}` : ''}
+                  </Text>
+                </div>
+
+                <Divider my={2} />
+
+                <Group gap="lg" wrap="wrap">
+                  <Switch label="Add to wantlist" checked={quickWantlist} onChange={e => setWantlistMode(e.currentTarget.checked)} size="sm" color="teal" />
                 </Group>
-                <Text size="xs" c="dimmed" mt={2}>{quickAddCard.typeLine}</Text>
-                <Tags card={quickAddCard} />
-                <Text size="xs" mt="sm">
-                  Market: <b>${parseFloat(quickForm.foil ? (quickAddCard.prices?.usd_foil || '0') : (quickAddCard.prices?.usd || '0')).toFixed(2)}</b>
-                  {quickAddCard.prices?.usd && !quickForm.foil && quickAddCard.prices?.usd_foil ? ` / Foil: $${parseFloat(quickAddCard.prices.usd_foil).toFixed(2)}` : ''}
-                  {quickAddCard.prices?.usd && quickForm.foil ? ` / Nonfoil: $${parseFloat(quickAddCard.prices.usd).toFixed(2)}` : ''}
-                </Text>
-              </div>
+
+                <SimpleGrid cols={2} spacing="sm">
+                  <NumberInput label="Qty" value={quickForm.quantity} onChange={v => setQuickForm(f => ({ ...f, quantity: Number(v) || 1 }))} min={1} max={999} size="sm" ref={qtyInputRef} />
+                  <Box style={{ position: 'relative' }}>
+                    <TextInput label="Price ($)" value={quickForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, purchasePrice: v })); setInvalidField(prev => prev === 'price' ? null : prev); }}
+                      placeholder={quickForm.foil ? (quickAddCard.prices?.usd_foil || '0.00') : (quickAddCard.prices?.usd || '0.00')} size="sm"
+                      leftSection={<Text size="xs" c="dimmed">$</Text>} ref={priceInputRef} onBlur={formatPrice} />
+                    {invalidField === 'price' && <InvalidBubble />}
+                  </Box>
+                </SimpleGrid>
+
+                <Group gap="md" wrap="wrap">
+                  <Switch label="Foil" checked={quickForm.foil} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foil: v })); }}
+                    disabled={!foilState(quickAddCard).canFoil || foilState(quickAddCard).foilOnly} size="sm" onLabel="F" offLabel="N" />
+                  <Switch label="Pack opened" checked={quickForm.packOpened} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, packOpened: v })); }}
+                    disabled={quickWantlist} size="sm" />
+                </Group>
+
+                <Box>
+                  <Text size="sm" fw={500} mb={4}>Condition</Text>
+                  <SegmentedControl value={quickForm.condition} onChange={v => setQuickForm(f => ({ ...f, condition: v as Condition }))}
+                    data={CONDITIONS.map(c => ({ value: c, label: c }))} size="xs" fullWidth
+                    styles={{ root: { gap: 2 }, label: { fontWeight: 600, fontSize: 11, padding: '2px 6px' }, indicator: { backgroundColor: CONDITION_COLORS[quickForm.condition] || '#00897b' } }} />
+                </Box>
+
+                <Group gap="md" wrap="wrap">
+                  <Switch label="Proxy" checked={quickForm.proxy} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, proxy: v })); }} disabled={quickWantlist} size="sm" />
+                  <Switch label="Misprint" checked={quickForm.misprint} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, misprint: v })); }} disabled={quickWantlist} size="sm" />
+                  <Switch label="Altered" checked={quickForm.altered} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, altered: v })); }} disabled={quickWantlist} size="sm" />
+                  <Switch label="Foreign language" checked={quickForm.foreignLanguage} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foreignLanguage: v })); }} disabled={quickWantlist} size="sm" color="teal" />
+                </Group>
+
+                <SimpleGrid cols={2} spacing="sm">
+                  <Box style={{ position: 'relative' }}>
+                    <Select label="Location" placeholder="Select location" searchable selectFirstOptionOnChange
+                      data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                      value={quickLoc} onChange={v => { setQuickLoc(v); setInvalidField(prev => prev === 'location' ? null : prev); }} size="sm" ref={locInputRef} disabled={quickWantlist} />
+                    {invalidField === 'location' && <InvalidBubble />}
+                  </Box>
+                  <Box style={{ position: 'relative' }}>
+                    <Select label={quickWantlist ? 'Destination' : 'Destination (optional)'} placeholder={quickWantlist ? 'Select destination' : 'No destination'}
+                      searchable selectFirstOptionOnChange
+                      data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                      value={quickDest} onChange={v => { setQuickDest(v); setInvalidField(prev => prev === 'destination' ? null : prev); }}
+                      clearable={!quickWantlist} allowDeselect={!quickWantlist}
+                      size="sm" ref={destInputRef} />
+                    {invalidField === 'destination' && <InvalidBubble />}
+                  </Box>
+                </SimpleGrid>
+
+                <TextInput label="Notes" value={quickForm.notes} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, notes: v })); }} placeholder="notes" size="sm" ref={notesInputRef} disabled={quickWantlist} />
+
+                <Group justify="flex-end" mt={4}>
+                  <Button variant="default" onClick={() => setQuickAddCard(null)}>Cancel</Button>
+                  <Button onClick={handleQuickAdd} loading={adding} leftSection={<IconPlus size={16} />}>
+                    Add to {quickWantlist ? 'Wantlist' : 'Collection'}
+                  </Button>
+                </Group>
+              </Stack>
             </Group>
-            <Group gap="sm" mb="sm">
-              <NumberInput label="Qty" value={quickForm.quantity} onChange={v => setQuickForm(f => ({ ...f, quantity: Number(v) || 1 }))} min={1} max={999} w={70} size="sm" ref={qtyInputRef} />
-              <Switch label="Foil" checked={quickForm.foil} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foil: v })); }}
-                disabled={!foilState(quickAddCard).canFoil || foilState(quickAddCard).foilOnly} size="sm" onLabel="F" offLabel="N" mt={24} />
-            </Group>
-            <Box mb="sm">
-              <Text size="sm" fw={500} mb={4}>Condition</Text>
-              <SegmentedControl value={quickForm.condition} onChange={v => setQuickForm(f => ({ ...f, condition: v as Condition }))}
-                data={CONDITIONS.map(c => ({ value: c, label: c }))} size="xs"
-                styles={{ root: { gap: 2 }, label: { fontWeight: 600, fontSize: 11, padding: '2px 6px' }, indicator: { backgroundColor: CONDITION_COLORS[quickForm.condition] || '#00897b' } }} />
-            </Box>
-            <Group gap="sm" mb="sm">
-              <Box style={{ position: 'relative' }}>
-                <TextInput label="Price ($)" value={quickForm.purchasePrice} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, purchasePrice: v })); setInvalidField(prev => prev === 'price' ? null : prev); }}
-                  placeholder={quickForm.foil ? (quickAddCard.prices?.usd_foil || '0.00') : (quickAddCard.prices?.usd || '0.00')} size="sm" w={120}
-                  leftSection={<Text size="xs" c="dimmed">$</Text>} ref={priceInputRef} onBlur={formatPrice} />
-                {invalidField === 'price' && <InvalidBubble />}
-              </Box>
-              <Switch label="Pack opened" checked={quickForm.packOpened} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, packOpened: v })); }} size="sm" mt={24} />
-            </Group>
-            <Group gap="sm" mb="sm">
-              <Switch label="Proxy" checked={quickForm.proxy} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, proxy: v })); }} size="sm" />
-              <Switch label="Misprint" checked={quickForm.misprint} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, misprint: v })); }} size="sm" />
-              <Switch label="Altered" checked={quickForm.altered} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, altered: v })); }} size="sm" />
-              <Switch label="Foreign language" checked={quickForm.foreignLanguage} onChange={e => { const v = e.currentTarget.checked; setQuickForm(f => ({ ...f, foreignLanguage: v })); }} size="sm" color="teal" />
-            </Group>
-            <Box style={{ position: 'relative' }}>
-              <Select label="Location" placeholder="Select location" searchable selectFirstOptionOnChange
-                data={locations.map(l => ({ value: String(l.id), label: l.name }))}
-                value={quickLoc} onChange={v => { setQuickLoc(v); setInvalidField(prev => prev === 'location' ? null : prev); }} mb="sm" size="sm" ref={locInputRef} />
-              {invalidField === 'location' && <InvalidBubble />}
-            </Box>
-            <Select label="Destination (optional)" placeholder="No destination" clearable searchable selectFirstOptionOnChange
-              data={locations.map(l => ({ value: String(l.id), label: l.name }))}
-              value={quickDest} onChange={setQuickDest} mb="sm" size="sm" ref={destInputRef} />
-            <TextInput label="Notes" value={quickForm.notes} onChange={e => { const v = e.currentTarget.value; setQuickForm(f => ({ ...f, notes: v })); }} placeholder="notes" size="sm" mb="md" ref={notesInputRef} />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => setQuickAddCard(null)}>Cancel</Button>
-              <Button onClick={handleQuickAdd} loading={adding} leftSection={<IconPlus size={16} />}>Add to Collection</Button>
-            </Group>
-            <Group gap="xs" mt="md" justify="center">
+
+            <Group gap="xs" mt="md" justify="center" wrap="wrap">
               <Badge size="xs" variant="light" color="gray">Enter</Badge>
               <Text size="xs" c="dimmed">Add</Text>
               <Badge size="xs" variant="light" color="gray">L</Badge>
@@ -1210,6 +1631,8 @@ export default function AddCardsPage() {
               <Text size="xs" c="dimmed">Qty</Text>
               <Badge size="xs" variant="light" color="gray">F</Badge>
               <Text size="xs" c="dimmed">Foil</Text>
+              <Badge size="xs" variant="light" color="gray">W</Badge>
+              <Text size="xs" c="dimmed">Wantlist</Text>
             </Group>
           </Box>
         )}
@@ -1259,6 +1682,182 @@ export default function AddCardsPage() {
             </Group>
           </>
         )}
+      </Modal>
+
+      <Modal opened={bulkOpen} onClose={() => setBulkOpen(false)} title="Bulk add cards" size="lg" centered>
+        <Stack gap="md">
+          <Text size="xs" c="dimmed">
+            One card per line. Format: <Badge size="xs" variant="light">[qty] set + collector number [*F*]</Badge> — e.g.{' '}
+            <Code>4 vow42</Code>, <Code>1 vow33 *F*</Code>, <Code>1 x vow33 *F*</Code>. The <b>*F*</b> marker imports foil.
+          </Text>
+          <Box style={{ position: 'relative' }}>
+            <Textarea
+              placeholder={'4 vow42\n1 vow33 *F*\n1 x vow33 *F*\n2 blb0342'}
+              value={bulkText}
+              onChange={e => setBulkText(e.currentTarget.value)}
+              autosize minRows={5} maxRows={14}
+              styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)', fontSize: 13 } }}
+            />
+          </Box>
+
+          <div>
+            <Text size="sm" fw={500} mb={6}>Import as</Text>
+            <SegmentedControl
+              value={bulkMode}
+              onChange={v => setBulkMode(v as 'collection' | 'wantlist')}
+              data={[
+                { label: 'Collection cards', value: 'collection' },
+                { label: 'Wantlist items', value: 'wantlist' },
+              ]}
+              size="sm"
+            />
+          </div>
+
+          <SimpleGrid cols={{ base: 1, sm: bulkMode === 'wantlist' ? 1 : 2 }} spacing="md">
+            {bulkMode === 'collection' && (
+              <Box style={{ position: 'relative' }}>
+                <Select
+                  label="Location"
+                  placeholder="Select location"
+                  searchable selectFirstOptionOnChange
+                  data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                  value={bulkLoc}
+                  onChange={v => { setBulkLoc(v); setBulkInvalid(prev => prev === 'location' ? null : prev); }}
+                  size="sm"
+                />
+                {bulkInvalid === 'location' && <InvalidBubble />}
+              </Box>
+            )}
+            <Box style={{ position: 'relative' }}>
+              <Select
+                label={bulkMode === 'wantlist' ? 'Destination' : 'Destination (optional)'}
+                placeholder={bulkMode === 'wantlist' ? 'Select destination' : 'No destination'}
+                searchable selectFirstOptionOnChange
+                data={locations.map(l => ({ value: String(l.id), label: l.name }))}
+                value={bulkDest}
+                onChange={v => { setBulkDest(v); setBulkInvalid(prev => prev === 'destination' ? null : prev); }}
+                clearable={bulkMode !== 'wantlist'}
+                allowDeselect={bulkMode !== 'wantlist'}
+                description={bulkMode === 'wantlist' ? 'Wantlist entries must live in a location. Defaults to Inbox.' : undefined}
+                size="sm"
+              />
+              {bulkInvalid === 'destination' && <InvalidBubble />}
+            </Box>
+            <div>
+              <Text size="sm" fw={500} mb={6}>Condition</Text>
+              <SegmentedControl value={bulkCondition} onChange={v => setBulkCondition(v as Condition)}
+                data={CONDITIONS.map(c => ({ value: c, label: c }))} size="xs"
+                styles={{ root: { gap: 2 }, label: { fontWeight: 600, fontSize: 11, padding: '2px 6px' }, indicator: { backgroundColor: CONDITION_COLORS[bulkCondition] || '#00897b' } }} />
+            </div>
+            {bulkMode === 'collection' && (
+              <Box style={{ position: 'relative' }}>
+                <TextInput label="Total price ($)" placeholder="Optional" value={bulkTotal}
+                  onChange={e => { const v = e.currentTarget.value; setBulkTotal(v); setBulkInvalid(prev => prev === 'total' ? null : prev); }}
+                  description="Divided evenly across all cards as their purchase price. Leave empty to auto-fill each card from its market price."
+                  size="sm"
+                  leftSection={<Text size="xs" c="dimmed">$</Text>}
+                />
+                {bulkInvalid === 'total' && <InvalidBubble />}
+              </Box>
+            )}
+          </SimpleGrid>
+
+          {bulkRows === null ? (
+            <Button variant="default" onClick={runBulkParse} loading={bulkResolving} leftSection={<IconSearch size={16} />}>
+              Preview lines
+            </Button>
+          ) : (
+            <>
+              <Group justify="space-between" wrap="nowrap">
+                <Text size="sm" c="dimmed">
+                  <b>{bulkOkRows.length}</b> resolved of {bulkRows.length} · {bulkTotalQty} card{bulkTotalQty !== 1 ? 's' : ''}
+                  {bulkMode === 'collection' && (bulkDividedPrice !== null
+                    ? <> · <b>${bulkDividedPrice.toFixed(2)}</b>/card shared</>
+                    : <> · prices auto-filled from market</>)}
+                </Text>
+                <Button variant="subtle" size="compact-sm" color="gray" onClick={runBulkParse} loading={bulkResolving}>
+                  Re-preview
+                </Button>
+              </Group>
+
+              <Table striped highlightOnHover withTableBorder styles={{ table: { fontSize: 13 } }}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Card</Table.Th>
+                    <Table.Th w={190}>Set</Table.Th>
+                    <Table.Th w={56}>#</Table.Th>
+                    <Table.Th w={56}>Qty</Table.Th>
+                    <Table.Th w={60}>Foil</Table.Th>
+                    <Table.Th w={90}>Condition</Table.Th>
+                    {bulkMode === 'collection' && <Table.Th w={110}>Price</Table.Th>}
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {bulkPageRows.map(r => {
+                    const price = bulkMode === 'collection'
+                      ? (bulkDividedPrice !== null ? bulkDividedPrice : cardAutoPrice(r.card, r.foil))
+                      : null;
+                    return (
+                      <Table.Tr key={r.key} opacity={r.ok ? 1 : 0.5}>
+                        {r.ok && r.card ? (
+                          <>
+                            <Table.Td>
+                              <Group gap="sm" wrap="nowrap">
+                                <CardThumb card={r.card} />
+                                <Text size="xs" fw={500}>{r.card.name}</Text>
+                              </Group>
+                            </Table.Td>
+                            <Table.Td><SetSymbol code={r.card.setCode} name={r.card.setName} /></Table.Td>
+                            <Table.Td><Text size="xs">{r.card.collectorNumber}</Text></Table.Td>
+                          </>
+                        ) : (
+                          <Table.Td colSpan={bulkMode === 'collection' ? 6 : 5}>
+                            <Text size="xs" c="red">Not found: {r.line}</Text>
+                          </Table.Td>
+                        )}
+                        <Table.Td><Text size="sm" fw={600}>{r.amount}</Text></Table.Td>
+                        <Table.Td>
+                          {r.foil ? <Badge size="xs" color="yellow" variant="light">Foil</Badge>
+                            : <Text size="xs" c="dimmed">—</Text>}
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge size="xs" style={{ backgroundColor: CONDITION_COLORS[bulkCondition] || '#00897b', color: '#fff' }}>
+                            {bulkCondition}
+                          </Badge>
+                        </Table.Td>
+                        {bulkMode === 'collection' && (
+                          <Table.Td>
+                            {price !== null ? (
+                              <Group gap={4} wrap="nowrap">
+                                <Text size="xs" fw={600}>${price.toFixed(2)}</Text>
+                                {bulkDividedPrice === null && <Text size="xs" c="dimmed">auto</Text>}
+                              </Group>
+                            ) : (
+                              <Text size="xs" c="dimmed">—</Text>
+                            )}
+                          </Table.Td>
+                        )}
+                      </Table.Tr>
+                    );
+                  })}
+                </Table.Tbody>
+              </Table>
+              {bulkPages > 1 && (
+                <Group justify="center" py="xs">
+                  <Pagination total={bulkPages} value={bulkPageSafe} onChange={setBulkPage} size="sm" />
+                </Group>
+              )}
+            </>
+          )}
+
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button onClick={doBulkAdd} loading={bulkAdding} disabled={!bulkRows || bulkRows.filter(r => r.ok).length === 0}
+              leftSection={<IconPlus size={16} />}>
+              Add to {bulkMode === 'collection' ? 'Collection' : 'Wantlist'}
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
     </>
   );

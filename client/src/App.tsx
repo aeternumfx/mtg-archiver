@@ -7,8 +7,10 @@ import { UndoProvider } from './components/UndoToasts';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { RequireAuth, RequireAdmin } from './auth/RequireAuth';
 import { ChangePasswordModal } from './auth/ChangePasswordModal';
+import { Starfield } from './components/Starfield';
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
+import AccountDisabledPage from './pages/AccountDisabledPage';
 import Dashboard from './pages/Dashboard';
 import AddCardsPage from './pages/AddCardsPage';
 import LocationsPage from './pages/LocationsPage';
@@ -63,11 +65,13 @@ export default function App() {
   return (
     <MantineProvider theme={current.theme} forceColorScheme={current.colorScheme}>
       <Notifications position="bottom-right" autoClose={5000} />
+      {themeKey === 'galaxy' && <Starfield />}
       <AuthProvider>
         <UndoProvider>
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/disabled" element={<AccountDisabledPage />} />
             <Route path="/share/:token" element={<ShareViewPage />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/add" element={<Protected><AddCardsPage /></Protected>} />

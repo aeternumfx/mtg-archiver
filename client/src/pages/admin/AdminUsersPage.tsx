@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Title, Group, Button, Table, Badge, Modal, TextInput, Stack, Text, Alert, ActionIcon, Checkbox, Avatar, HoverCard,
+  Title, Group, Button, Table, Badge, Modal, TextInput, Stack, Text, Alert, ActionIcon, Checkbox, Avatar, HoverCard, SegmentedControl,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { useNavigate } from 'react-router-dom';
-import { IconUserPlus, IconAlertCircle, IconAlertTriangle, IconRefresh, IconTrash, IconKey, IconPower, IconLogout, IconPencil, IconCopy, IconShare, IconEye, IconSparkles, IconShieldUp, IconShieldDown, IconDatabase } from '@tabler/icons-react';
+import { IconUserPlus, IconAlertCircle, IconAlertTriangle, IconRefresh, IconTrash, IconKey, IconPower, IconLogout, IconPencil, IconCopy, IconShare, IconEye, IconSparkles, IconShieldUp, IconShieldDown, IconDatabase, IconSearch, IconChevronUp, IconChevronDown } from '@tabler/icons-react';
 import { api } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -32,6 +32,21 @@ const formatBytes = (b: number | undefined | null) => {
   return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 };
 
+type SortKey = 'username' | 'displayName' | 'role' | 'status' | 'activeSessions' | 'storageBytes' | 'createdAt' | 'lastLoginAt';
+
+function SortTh({ children, k, sortKey, sortDir, onSort }: {
+  children: React.ReactNode; k: SortKey; sortKey: SortKey; sortDir: 'asc' | 'desc'; onSort: (k: SortKey) => void;
+}) {
+  return (
+    <Table.Th style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }} onClick={() => onSort(k)}>
+      <Group gap={4} wrap="nowrap">
+        {children}
+        {sortKey === k && (sortDir === 'asc' ? <IconChevronUp size={12} /> : <IconChevronDown size={12} />)}
+      </Group>
+    </Table.Th>
+  );
+}
+
 export default function AdminUsersPage() {
   const { user: me, refresh } = useAuth();
   const navigate = useNavigate();
@@ -52,6 +67,43 @@ export default function AdminUsersPage() {
   const [confirmRole, setConfirmRole] = useState<{ user: AdminUser; role: 'user' | 'moderator' } | null>(null);
   const [tourUser, setTourUser] = useState<AdminUser | null>(null);
   const [domain, setDomain] = useState('');
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [sortKey, setSortKey] = useState<SortKey>('username');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const toggleSort = (k: SortKey) => {
+    if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(k); setSortDir('asc'); }
+  };
+
+  const visibleUsers = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = users.filter(u => {
+      if (statusFilter === 'active' && u.disabled) return false;
+      if (statusFilter === 'inactive' && !u.disabled) return false;
+      if (!q) return true;
+      return u.username.toLowerCase().includes(q)
+        || (u.displayName?.toLowerCase().includes(q) ?? false);
+    });
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const roleRank = (u: AdminUser) => u.role === 'admin' ? 0 : u.role === 'moderator' ? 1 : 2;
+    const statusRank = (u: AdminUser) => u.disabled ? 0 : u.mustChangePassword ? 1 : u.pendingTour ? 2 : 3;
+    return [...list].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'username': cmp = a.username.localeCompare(b.username); break;
+        case 'displayName': cmp = (a.displayName ?? '').localeCompare(b.displayName ?? ''); break;
+        case 'role': cmp = roleRank(a) - roleRank(b); break;
+        case 'status': cmp = statusRank(a) - statusRank(b); break;
+        case 'activeSessions': cmp = a.activeSessions - b.activeSessions; break;
+        case 'storageBytes': cmp = a.storageBytes - b.storageBytes; break;
+        case 'createdAt': cmp = (a.createdAt ?? '').localeCompare(b.createdAt ?? ''); break;
+        case 'lastLoginAt': cmp = (a.lastLoginAt ?? '').localeCompare(b.lastLoginAt ?? ''); break;
+      }
+      return cmp * dir;
+    });
+  }, [users, query, statusFilter, sortKey, sortDir]);
 
   const load = useCallback(async () => {
     try {
@@ -217,31 +269,56 @@ export default function AdminUsersPage() {
 
   return (
     <Stack gap="lg">
+      <div>
+        <Title order={2}>Users</Title>
+        <Text c="dimmed" size="sm">Create and manage user accounts. Each user gets their own private collection.</Text>
+      </div>
+
       <Group justify="space-between">
-        <div>
-          <Title order={2}>Users</Title>
-          <Text c="dimmed" size="sm">Create and manage user accounts. Each user gets their own private collection.</Text>
-        </div>
+        <TextInput
+          leftSection={<IconSearch size={16} />}
+          placeholder="Search by username or display name"
+          value={query}
+          onChange={e => setQuery(e.currentTarget.value)}
+          style={{ flex: 1 }}
+          size="sm"
+        />
+        <SegmentedControl
+          size="sm"
+          value={statusFilter}
+          onChange={v => setStatusFilter(v as 'all' | 'active' | 'inactive')}
+          data={[
+            { label: 'All', value: 'all' },
+            { label: 'Active', value: 'active' },
+            { label: 'Inactive', value: 'inactive' },
+          ]}
+        />
         <Button leftSection={<IconUserPlus size={16} />} onClick={() => setCreateOpen(true)}>Create user</Button>
       </Group>
 
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>User</Table.Th>
-            <Table.Th>Display name</Table.Th>
-            <Table.Th>Role</Table.Th>
-            <Table.Th>Status</Table.Th>
-            <Table.Th>Sessions</Table.Th>
-            <Table.Th>Storage</Table.Th>
+            <SortTh k="username" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>User</SortTh>
+            <SortTh k="displayName" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Display name</SortTh>
+            <SortTh k="role" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Role</SortTh>
+            <SortTh k="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Status</SortTh>
+            <SortTh k="activeSessions" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Sessions</SortTh>
+            <SortTh k="storageBytes" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Storage</SortTh>
             <Table.Th>Password</Table.Th>
-            <Table.Th>Created</Table.Th>
-            <Table.Th>Last login</Table.Th>
+            <SortTh k="createdAt" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Created</SortTh>
+            <SortTh k="lastLoginAt" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort}>Last login</SortTh>
             <Table.Th ta="right">Actions</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {users.map(u => (
+          {visibleUsers.length === 0 ? (
+            <Table.Tr>
+              <Table.Td colSpan={10}>
+                <Text size="sm" c="dimmed" ta="center" py="sm">No users match this search.</Text>
+              </Table.Td>
+            </Table.Tr>
+          ) : visibleUsers.map(u => (
             <Table.Tr key={u.id} opacity={u.disabled ? 0.5 : 1}>
               <Table.Td>
                 <Group gap="sm" wrap="nowrap">

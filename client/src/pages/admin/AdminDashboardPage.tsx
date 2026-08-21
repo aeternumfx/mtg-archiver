@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Title, Text, Stack, SimpleGrid, Paper, Group, Badge, Button, Table, Progress, Alert,
+  Title, Text, Stack, SimpleGrid, Paper, Group, Badge, Button, Table, Progress, Alert, Pagination,
 } from '@mantine/core';
 import { IconUsers, IconShieldLock, IconPower, IconUserCheck, IconRefresh, IconCards, IconDatabase, IconPhoto, IconPlug, IconActivity } from '@tabler/icons-react';
 import { api } from '../../api/client';
@@ -56,6 +56,7 @@ export default function AdminDashboardPage() {
   const [feed, setFeed] = useState<ActivityEvent[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [storagePage, setStoragePage] = useState(1);
 
   const load = useCallback(async () => {
     try {
@@ -101,6 +102,11 @@ export default function AdminDashboardPage() {
   const syncColor = stats.catalog.syncing ? 'yellow' : stats.catalog.lastSync ? 'green' : 'red';
   const maxUserBytes = Math.max(...stats.storage.perUser.map(u => u.bytes), 1);
 
+  const STORAGE_PER_PAGE = 6;
+  const storagePages = Math.max(1, Math.ceil(stats.storage.perUser.length / STORAGE_PER_PAGE));
+  const storagePageSafe = Math.min(storagePage, storagePages);
+  const storageUsers = stats.storage.perUser.slice((storagePageSafe - 1) * STORAGE_PER_PAGE, storagePageSafe * STORAGE_PER_PAGE);
+
   return (
     <Stack gap="lg">
       <div>
@@ -130,26 +136,33 @@ export default function AdminDashboardPage() {
           {stats.storage.perUser.length === 0 ? (
             <Text size="sm" c="dimmed">No user databases on disk yet.</Text>
           ) : (
-            <Table highlightOnHover styles={{ table: { fontSize: 12 } }}>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>User</Table.Th>
-                  <Table.Th w="40%">Size</Table.Th>
-                  <Table.Th ta="right">Bytes</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {stats.storage.perUser.map(u => (
-                  <Table.Tr key={u.userId}>
-                    <Table.Td>@{u.username}</Table.Td>
-                    <Table.Td>
-                      <Progress value={(u.bytes / maxUserBytes) * 100} size="sm" color={u.bytes > 100 * 1024 * 1024 ? 'orange' : 'blue'} />
-                    </Table.Td>
-                    <Table.Td ta="right">{formatBytes(u.bytes)}</Table.Td>
+            <>
+              <Table highlightOnHover styles={{ table: { fontSize: 12 } }}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>User</Table.Th>
+                    <Table.Th w="40%">Size</Table.Th>
+                    <Table.Th ta="right">Bytes</Table.Th>
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
+                </Table.Thead>
+                <Table.Tbody>
+                  {storageUsers.map(u => (
+                    <Table.Tr key={u.userId}>
+                      <Table.Td>@{u.username}</Table.Td>
+                      <Table.Td>
+                        <Progress value={(u.bytes / maxUserBytes) * 100} size="sm" color={u.bytes > 100 * 1024 * 1024 ? 'orange' : 'blue'} />
+                      </Table.Td>
+                      <Table.Td ta="right">{formatBytes(u.bytes)}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+              {storagePages > 1 && (
+                <Group justify="center" mt="sm">
+                  <Pagination total={storagePages} value={storagePageSafe} onChange={setStoragePage} size="sm" />
+                </Group>
+              )}
+            </>
           )}
         </Paper>
 
